@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # EG4 6500 Power Monitor
 
 This project runs directly on a Raspberry Pi, polls your EG4 inverter over the existing RS232 connection, stores samples in SQLite, and serves a lightweight dashboard you can open from a browser on the same Wi-Fi.
@@ -104,3 +105,6 @@ If your inverter returns a slightly different field order, the dashboard will st
 ## Remote access later
 
 For secure off-site access, the simplest next step is usually Tailscale on the Raspberry Pi. That avoids exposing the dashboard directly to the internet.
+=======
+# EG4-Power-Monitor
+>>>>>>> 84fb31e00292c2448ac22276a4a1340f9ddeeebc
