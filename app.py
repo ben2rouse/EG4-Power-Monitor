@@ -9,6 +9,8 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
@@ -37,6 +39,10 @@ class Settings:
     port: int = int(os.getenv("POWER_MONITOR_PORT", "8080"))
     mock_mode: bool = os.getenv("POWER_MONITOR_MOCK", "0").lower() in {"1", "true", "yes"}
     serial_timeout: float = float(os.getenv("POWER_MONITOR_SERIAL_TIMEOUT", "2.5"))
+    low_battery_percent: int = int(os.getenv("POWER_MONITOR_LOW_BATTERY_PERCENT", "25"))
+    high_load_watts: int = int(os.getenv("POWER_MONITOR_HIGH_LOAD_WATTS", "4000"))
+    alert_cooldown_minutes: int = int(os.getenv("POWER_MONITOR_ALERT_COOLDOWN_MINUTES", "20"))
+    ntfy_topic_url: str = os.getenv("POWER_MONITOR_NTFY_TOPIC_URL", "").strip()
 
 
 def utc_now() -> datetime:
@@ -205,6 +211,23 @@ class Database:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_samples_ts_utc ON samples(ts_utc)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts_utc TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    sample_json TEXT,
+                    delivered INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alerts_ts_utc ON alerts(ts_utc DESC)"
+            )
 
     def insert_sample(self, ts_utc: datetime, sample: dict[str, Any]) -> None:
         record = {"ts_utc": isoformat(ts_utc), **sample}
@@ -237,12 +260,157 @@ class Database:
             cursor = connection.execute("DELETE FROM samples WHERE ts_utc < ?", (cutoff,))
             return cursor.rowcount
 
+    def insert_alert(
+        self,
+        ts_utc: datetime,
+        level: str,
+        code: str,
+        title: str,
+        message: str,
+        sample: dict[str, Any] | None,
+        delivered: bool,
+    ) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO alerts (ts_utc, level, code, title, message, sample_json, delivered)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    isoformat(ts_utc),
+                    level,
+                    code,
+                    title,
+                    message,
+                    json.dumps(sample) if sample is not None else None,
+                    1 if delivered else 0,
+                ),
+            )
+
+    def fetch_alerts(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT ts_utc, level, code, title, message, sample_json, delivered
+                FROM alerts
+                ORDER BY ts_utc DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        alerts = []
+        for row in rows:
+            item = dict(row)
+            item["sample"] = json.loads(item.pop("sample_json")) if item["sample_json"] else None
+            item["delivered"] = bool(item["delivered"])
+            alerts.append(item)
+        return alerts
+
+
+class AlertManager:
+    def __init__(self, settings: Settings, database: Database) -> None:
+        self.settings = settings
+        self.database = database
+        self._last_sent: dict[str, datetime] = {}
+        self._lock = threading.Lock()
+
+    def evaluate_sample(self, ts_utc: datetime, sample: dict[str, Any]) -> None:
+        battery_capacity = sample.get("battery_capacity_percent")
+        load_watts = sample.get("output_active_power_w")
+        solar_watts = sample.get("pv_input_power_w")
+        battery_voltage = sample.get("battery_voltage_v")
+        battery_discharge_current = sample.get("battery_discharge_current_a")
+
+        if battery_capacity is not None and battery_capacity <= self.settings.low_battery_percent:
+            self._emit(
+                ts_utc,
+                "warning",
+                "low_battery",
+                "Battery is low",
+                f"Battery capacity is at {battery_capacity}% (threshold {self.settings.low_battery_percent}%).",
+                sample,
+            )
+
+        if load_watts is not None and load_watts >= self.settings.high_load_watts:
+            self._emit(
+                ts_utc,
+                "warning",
+                "high_load",
+                "Load is running high",
+                f"Load is {load_watts} W (threshold {self.settings.high_load_watts} W).",
+                sample,
+            )
+
+        if (
+            load_watts is not None
+            and solar_watts is not None
+            and battery_voltage is not None
+            and battery_discharge_current is not None
+            and load_watts > solar_watts
+        ):
+            estimated_battery_watts = battery_voltage * battery_discharge_current
+            if estimated_battery_watts >= 500:
+                self._emit(
+                    ts_utc,
+                    "info",
+                    "battery_supporting_load",
+                    "Battery is covering a solar shortfall",
+                    (
+                        f"Solar is {solar_watts} W while load is {load_watts} W. "
+                        f"Estimated battery output is {int(round(estimated_battery_watts))} W."
+                    ),
+                    sample,
+                )
+
+    def notify_error(self, ts_utc: datetime, error_message: str) -> None:
+        self._emit(
+            ts_utc,
+            "critical",
+            "inverter_error",
+            "Inverter communication problem",
+            error_message,
+            None,
+        )
+
+    def _emit(
+        self,
+        ts_utc: datetime,
+        level: str,
+        code: str,
+        title: str,
+        message: str,
+        sample: dict[str, Any] | None,
+    ) -> None:
+        with self._lock:
+            last_sent = self._last_sent.get(code)
+            if last_sent is not None and ts_utc - last_sent < timedelta(minutes=self.settings.alert_cooldown_minutes):
+                return
+            delivered = self._deliver_notification(title, message)
+            self.database.insert_alert(ts_utc, level, code, title, message, sample, delivered)
+            self._last_sent[code] = ts_utc
+
+    def _deliver_notification(self, title: str, message: str) -> bool:
+        if not self.settings.ntfy_topic_url:
+            return False
+        request = urllib.request.Request(
+            self.settings.ntfy_topic_url,
+            data=message.encode("utf-8"),
+            method="POST",
+            headers={"Title": title},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5):
+                return True
+        except (urllib.error.URLError, TimeoutError):
+            return False
+
 
 class PowerMonitorState:
     def __init__(self, settings: Settings, database: Database) -> None:
         self.settings = settings
         self.database = database
         self.client = InverterClient(settings)
+        self.alert_manager = AlertManager(settings, database)
         self.lock = threading.Lock()
         self.latest: dict[str, Any] | None = None
         self.last_error: str | None = None
@@ -266,12 +434,14 @@ class PowerMonitorState:
             try:
                 sample = self.client.poll()
                 self.database.insert_sample(timestamp, sample)
+                self.alert_manager.evaluate_sample(timestamp, sample)
                 self.database.prune()
                 with self.lock:
                     self.latest = {"ts_utc": isoformat(timestamp), **sample}
                     self.last_success_at = isoformat(timestamp)
                     self.last_error = None
             except Exception as exc:
+                self.alert_manager.notify_error(timestamp, str(exc))
                 with self.lock:
                     self.last_error = str(exc)
             self._stop_event.wait(self.settings.poll_seconds)
@@ -289,6 +459,17 @@ class PowerMonitorState:
                 "last_error": self.last_error,
                 "sample": self.latest,
             }
+
+    def get_alerts_payload(self) -> dict[str, Any]:
+        return {
+            "alerts": self.database.fetch_alerts(),
+            "settings": {
+                "low_battery_percent": self.settings.low_battery_percent,
+                "high_load_watts": self.settings.high_load_watts,
+                "alert_cooldown_minutes": self.settings.alert_cooldown_minutes,
+                "ntfy_enabled": bool(self.settings.ntfy_topic_url),
+            },
+        }
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -315,6 +496,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "settings": asdict(self.app_state.settings),
                 }
             )
+            return
+        if parsed.path == "/api/alerts":
+            self._send_json(self.app_state.get_alerts_payload())
             return
         self._serve_static(parsed.path)
 

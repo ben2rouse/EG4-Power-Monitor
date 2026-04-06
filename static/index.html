@@ -19,55 +19,88 @@
         </div>
       </section>
 
-      <section class="cards" id="metric-cards"></section>
+      <nav class="page-nav" aria-label="Sections">
+        <button type="button" class="page-tab active" data-page="dashboard">Dashboard</button>
+        <button type="button" class="page-tab" data-page="history">History</button>
+        <button type="button" class="page-tab" data-page="alerts">Alerts</button>
+      </nav>
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Overview</p>
-            <h2>How the system is behaving</h2>
-          </div>
-        </div>
-        <section class="overview-grid" id="overview-grid"></section>
-      </section>
+      <section class="page active" id="page-dashboard">
+        <section class="cards" id="metric-cards"></section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">History</p>
-            <h2>Load, solar, and capacity over time</h2>
-          </div>
-          <div class="chart-controls">
-            <div class="zoom-controls">
-              <button type="button" class="zoom-button" id="zoom-out">Zoom Out</button>
-              <div class="zoom-status" id="zoom-status">Viewing last 24 hours</div>
-              <button type="button" class="zoom-button" id="zoom-in">Zoom In</button>
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Overview</p>
+              <h2>How the system is behaving</h2>
             </div>
-            <label class="overlay-toggle">
-              <input type="checkbox" id="deficit-toggle" checked />
-              <span>Highlight solar shortfall</span>
-            </label>
-            <div class="series-picker" id="series-picker"></div>
           </div>
-        </div>
-        <div class="chart-wrap">
-          <svg id="history-chart" viewBox="0 0 1200 420" preserveAspectRatio="none"></svg>
-          <div class="chart-tooltip hidden" id="chart-tooltip"></div>
-        </div>
-        <div class="timeline-controls">
-          <label class="pan-range">
-            <span>Timeline</span>
-            <input type="range" id="timeline-slider" min="0" max="1000" value="1000" />
-          </label>
-        </div>
-        <div class="legend" id="chart-legend"></div>
+          <section class="overview-grid" id="overview-grid"></section>
+        </section>
+
+        <section class="panel">
+          <div>
+            <p class="eyebrow">Connection</p>
+            <div class="kv-list" id="connection-details"></div>
+          </div>
+        </section>
       </section>
 
-      <section class="panel">
-        <div>
-          <p class="eyebrow">Connection</p>
-          <div class="kv-list" id="connection-details"></div>
-        </div>
+      <section class="page" id="page-history">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">History</p>
+              <h2>Load, solar, and battery behavior over time</h2>
+            </div>
+            <div class="chart-controls">
+              <div class="zoom-controls">
+                <button type="button" class="zoom-button" id="zoom-out">Zoom Out</button>
+                <div class="zoom-status" id="zoom-status">Viewing last 24 hours</div>
+                <button type="button" class="zoom-button" id="zoom-in">Zoom In</button>
+              </div>
+              <label class="overlay-toggle">
+                <input type="checkbox" id="deficit-toggle" checked />
+                <span>Highlight solar shortfall</span>
+              </label>
+              <div class="series-picker" id="series-picker"></div>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="history-chart" viewBox="0 0 1200 420" preserveAspectRatio="none"></svg>
+            <div class="chart-tooltip hidden" id="chart-tooltip"></div>
+          </div>
+          <div class="chart-help">Tap once to lock a point on mobile. Swipe across the chart or use the timeline slider to pan.</div>
+          <div class="timeline-controls">
+            <label class="pan-range">
+              <span>Timeline</span>
+              <input type="range" id="timeline-slider" min="0" max="1000" value="1000" />
+            </label>
+          </div>
+          <div class="legend" id="chart-legend"></div>
+        </section>
+      </section>
+
+      <section class="page" id="page-alerts">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Alerts</p>
+              <h2>Notifications and recent events</h2>
+            </div>
+          </div>
+          <section class="overview-grid" id="alert-settings-grid"></section>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Recent Alerts</p>
+              <h2>What needs attention</h2>
+            </div>
+          </div>
+          <div class="alerts-list" id="alerts-list"></div>
+        </section>
       </section>
     </main>
 

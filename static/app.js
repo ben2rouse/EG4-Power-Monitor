@@ -1,8 +1,18 @@
+const pageTabs = Array.from(document.querySelectorAll(".page-tab"));
+const pages = {
+  dashboard: document.getElementById("page-dashboard"),
+  history: document.getElementById("page-history"),
+  alerts: document.getElementById("page-alerts"),
+};
+
 const metricCards = document.getElementById("metric-cards");
 const connectionStatus = document.getElementById("connection-status");
 const lastUpdated = document.getElementById("last-updated");
 const connectionDetails = document.getElementById("connection-details");
 const overviewGrid = document.getElementById("overview-grid");
+const alertSettingsGrid = document.getElementById("alert-settings-grid");
+const alertsList = document.getElementById("alerts-list");
+
 const chart = document.getElementById("history-chart");
 const chartTooltip = document.getElementById("chart-tooltip");
 const seriesPicker = document.getElementById("series-picker");
@@ -31,13 +41,22 @@ const chartSeries = [
   { key: "load_percent", label: "Load level", unit: "%", colorVar: "var(--level)", swatch: "swatch-level", axis: "percent", checked: true },
 ];
 
-const visibleSeries = new Set(chartSeries.filter((series) => series.checked).map((series) => series.key));
-let currentHistoryPoints = [];
-let currentLiveSample = {};
-const zoomSteps = [1, 3, 6, 12, 24, 72, 168];
-let viewportHours = 24;
-let viewportEndFraction = 1;
-let showSolarDeficit = true;
+const state = {
+  page: "dashboard",
+  livePayload: null,
+  historyPoints: [],
+  alertsPayload: null,
+  currentLiveSample: {},
+  visibleSeries: new Set(chartSeries.filter((series) => series.checked).map((series) => series.key)),
+  viewportHours: 24,
+  viewportEndFraction: 1,
+  showSolarDeficit: true,
+  zoomSteps: [1, 3, 6, 12, 24, 72, 168],
+  chartPointer: {
+    locked: false,
+    x: null,
+  },
+};
 
 function formatNumber(value, unit) {
   if (value === null || value === undefined || Number.isNaN(value)) return "--";
@@ -63,6 +82,16 @@ function enrichSample(sample) {
   };
 }
 
+function setActivePage(page) {
+  state.page = page;
+  pageTabs.forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.page === page);
+  });
+  Object.entries(pages).forEach(([key, element]) => {
+    element.classList.toggle("active", key === page);
+  });
+}
+
 function renderCards(sample) {
   const enriched = enrichSample(sample);
   metricCards.innerHTML = "";
@@ -71,7 +100,7 @@ function renderCards(sample) {
     card.className = "metric-card";
     card.innerHTML = `
       <div class="label">${label}</div>
-      <div class="value">${formatNumber(enriched?.[key], unit)}</div>
+      <div class="value">${formatNumber(enriched[key], unit)}</div>
       <div class="sub">${key.replaceAll("_", " ")}</div>
     `;
     metricCards.appendChild(card);
@@ -79,24 +108,21 @@ function renderCards(sample) {
 }
 
 function renderConnection(payload) {
-  const sample = payload.sample;
-  const ok = Boolean(sample) && !payload.last_error;
+  const ok = Boolean(payload?.sample) && !payload?.last_error;
   connectionStatus.textContent = ok ? "Receiving inverter data" : "Waiting on inverter";
   connectionStatus.className = `status-pill${ok ? "" : " warn"}`;
-  lastUpdated.textContent = payload.last_success_at
+  lastUpdated.textContent = payload?.last_success_at
     ? `Last sample: ${new Date(payload.last_success_at).toLocaleString()}`
     : "Waiting for first sample";
 
   const details = [
-    ["Serial Port", payload.settings.serial_port],
-    ["Poll Interval", `${payload.settings.poll_seconds} sec`],
-    ["Mock Mode", payload.settings.mock_mode ? "On" : "Off"],
-    ["Last Error", payload.last_error || "None"],
+    ["Serial Port", payload?.settings?.serial_port || "--"],
+    ["Poll Interval", payload?.settings?.poll_seconds ? `${payload.settings.poll_seconds} sec` : "--"],
+    ["Mock Mode", payload?.settings?.mock_mode ? "On" : "Off"],
+    ["Last Error", payload?.last_error || "None"],
   ];
 
-  connectionDetails.innerHTML = details
-    .map(([k, v]) => `<div>${k}</div><div>${v}</div>`)
-    .join("");
+  connectionDetails.innerHTML = details.map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join("");
 }
 
 function buildOverview(sample, historyPoints) {
@@ -122,23 +148,15 @@ function buildOverview(sample, historyPoints) {
     : enriched.battery_charging_current_a && enriched.battery_charging_current_a > 1
       ? "Charging"
       : "Stable";
-  const peakLoad = validLoadPoints.length
-    ? Math.max(...validLoadPoints.map((point) => point.output_active_power_w))
-    : null;
-  const peakSolar = validSolarPoints.length
-    ? Math.max(...validSolarPoints.map((point) => point.pv_input_power_w))
-    : null;
+  const peakLoad = validLoadPoints.length ? Math.max(...validLoadPoints.map((point) => point.output_active_power_w)) : null;
+  const peakSolar = validSolarPoints.length ? Math.max(...validSolarPoints.map((point) => point.pv_input_power_w)) : null;
   const averageSolarCoverage = validLoadPoints.length
     ? recentPoints.reduce((sum, point) => {
-      if (!point.output_active_power_w || point.pv_input_power_w === null || point.pv_input_power_w === undefined) {
-        return sum;
-      }
+      if (!point.output_active_power_w || point.pv_input_power_w === null || point.pv_input_power_w === undefined) return sum;
       return sum + Math.min(100, (point.pv_input_power_w / point.output_active_power_w) * 100);
     }, 0) / validLoadPoints.length
     : null;
-  const solarDeficitTime = recentPoints.length
-    ? (deficitPoints.length / recentPoints.length) * 100
-    : null;
+  const solarDeficitTime = recentPoints.length ? (deficitPoints.length / recentPoints.length) * 100 : null;
   const batteryTrend = validCapacityPoints.length > 4
     ? validCapacityPoints[validCapacityPoints.length - 1].battery_capacity_percent - validCapacityPoints[0].battery_capacity_percent
     : null;
@@ -151,124 +169,109 @@ function buildOverview(sample, historyPoints) {
         : "Battery reserve has stayed mostly flat";
 
   return [
-    {
-      label: "Solar Coverage Now",
-      value: formatNumber(enriched.solar_coverage_percent, "%"),
-      sub: "Current load covered directly by solar",
-    },
-    {
-      label: "Battery Contribution Now",
-      value: formatNumber(batteryContribution, "%"),
-      sub: "Share of the present load likely supplied by battery",
-    },
-    {
-      label: "Battery Status",
-      value: batteryStatus,
-      sub: batteryPowerEstimate !== null
-        ? `Estimated battery output ${formatNumber(batteryPowerEstimate, "W")}`
-        : "Waiting for enough battery data",
-    },
-    {
-      label: "Peak Load",
-      value: formatNumber(peakLoad, "W"),
-      sub: "Highest load in the recent history window",
-    },
-    {
-      label: "Peak Solar",
-      value: formatNumber(peakSolar, "W"),
-      sub: "Highest solar input in the recent history window",
-    },
-    {
-      label: "Solar Deficit Time",
-      value: formatNumber(solarDeficitTime, "%"),
-      sub: "How often load has been above solar recently",
-    },
-    {
-      label: "Average Solar Coverage",
-      value: formatNumber(averageSolarCoverage, "%"),
-      sub: "Average load coverage across recent samples",
-    },
-    {
-      label: "Battery Trend",
-      value: batteryTrend === null ? "--" : `${batteryTrend > 0 ? "+" : ""}${batteryTrend.toFixed(1)}%`,
-      sub: batteryTrendText,
-    },
+    ["Solar Coverage Now", formatNumber(enriched.solar_coverage_percent, "%"), "Current load covered directly by solar"],
+    ["Battery Contribution Now", formatNumber(batteryContribution, "%"), "Share of the present load likely supplied by battery"],
+    ["Battery Status", batteryStatus, batteryPowerEstimate !== null ? `Estimated battery output ${formatNumber(batteryPowerEstimate, "W")}` : "Waiting for enough battery data"],
+    ["Peak Load", formatNumber(peakLoad, "W"), "Highest load in the recent history window"],
+    ["Peak Solar", formatNumber(peakSolar, "W"), "Highest solar input in the recent history window"],
+    ["Solar Deficit Time", formatNumber(solarDeficitTime, "%"), "How often load has been above solar recently"],
+    ["Average Solar Coverage", formatNumber(averageSolarCoverage, "%"), "Average load coverage across recent samples"],
+    ["Battery Trend", batteryTrend === null ? "--" : `${batteryTrend > 0 ? "+" : ""}${batteryTrend.toFixed(1)}%`, batteryTrendText],
   ];
 }
 
-function renderOverview(sample, historyPoints) {
-  const overviewCards = buildOverview(sample, historyPoints);
-  overviewGrid.innerHTML = overviewCards.map((card) => `
+function renderOverview() {
+  const cards = buildOverview(state.currentLiveSample, state.historyPoints);
+  overviewGrid.innerHTML = cards.map(([label, value, sub]) => `
     <article class="overview-card">
-      <div class="label">${card.label}</div>
-      <div class="value">${card.value}</div>
-      <div class="sub">${card.sub}</div>
+      <div class="label">${label}</div>
+      <div class="value">${value}</div>
+      <div class="sub">${sub}</div>
     </article>
   `).join("");
 }
 
-function formatViewportLabel(hours) {
-  if (hours < 24) return `Viewing last ${hours} hour${hours === 1 ? "" : "s"}`;
-  const days = hours / 24;
-  return `Viewing last ${days} day${days === 1 ? "" : "s"}`;
+function renderAlertSettings() {
+  const settings = state.alertsPayload?.settings || {};
+  const cards = [
+    ["Low Battery Threshold", formatNumber(settings.low_battery_percent, "%"), "Creates a warning when battery capacity drops under this level."],
+    ["High Load Threshold", formatNumber(settings.high_load_watts, "W"), "Creates a warning when load crosses this wattage."],
+    ["Alert Cooldown", settings.alert_cooldown_minutes ? `${settings.alert_cooldown_minutes} min` : "--", "Prevents duplicate notifications from firing too often."],
+    ["Push Delivery", settings.ntfy_enabled ? "Enabled" : "Not configured", "Set POWER_MONITOR_NTFY_TOPIC_URL on the Pi to receive push notifications."],
+  ];
+  alertSettingsGrid.innerHTML = cards.map(([label, value, sub]) => `
+    <article class="overview-card">
+      <div class="label">${label}</div>
+      <div class="value">${value}</div>
+      <div class="sub">${sub}</div>
+    </article>
+  `).join("");
 }
 
-function updateZoomStatus(totalSpanMs) {
-  zoomStatus.textContent = formatViewportLabel(viewportHours);
-  zoomInButton.disabled = viewportHours === zoomSteps[0];
-  zoomOutButton.disabled = viewportHours === zoomSteps[zoomSteps.length - 1];
-
-  const totalHours = totalSpanMs / 3600000;
-  const canPan = totalHours > viewportHours;
-  timelineSlider.disabled = !canPan;
+function renderAlerts() {
+  renderAlertSettings();
+  const alerts = state.alertsPayload?.alerts || [];
+  if (!alerts.length) {
+    alertsList.innerHTML = `<div class="empty-state">No alerts recorded yet. Once a threshold is crossed or the inverter stops responding, alerts will appear here.</div>`;
+    return;
+  }
+  alertsList.innerHTML = alerts.map((alert) => `
+    <article class="alert-card ${alert.level}">
+      <div class="topline">
+        <div class="title">${alert.title}</div>
+        <div class="timestamp">${new Date(alert.ts_utc).toLocaleString()}</div>
+      </div>
+      <div class="message">${alert.message}</div>
+      <div class="meta">
+        <span>${alert.level.toUpperCase()}</span>
+        <span> · </span>
+        <span>${alert.delivered ? "Push sent" : "Stored locally"}</span>
+      </div>
+    </article>
+  `).join("");
 }
 
 function buildSeriesControls() {
   seriesPicker.innerHTML = chartSeries.map((series) => `
     <label class="series-option">
-      <input type="checkbox" data-series-key="${series.key}" ${visibleSeries.has(series.key) ? "checked" : ""} />
+      <input type="checkbox" data-series-key="${series.key}" ${state.visibleSeries.has(series.key) ? "checked" : ""} />
       <i class="swatch ${series.swatch}"></i>
       <span>${series.label}</span>
     </label>
   `).join("");
 
   chartLegend.innerHTML = chartSeries
-    .filter((series) => visibleSeries.has(series.key))
-    .map((series) => `<span><i class="swatch ${series.swatch}"></i> ${series.label}</span>`)
+    .filter((series) => state.visibleSeries.has(series.key))
+    .map((series) => `<span><i class="swatch ${series.swatch}"></i>${series.label}</span>`)
     .join("");
 
   seriesPicker.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
     checkbox.addEventListener("change", (event) => {
       const key = event.target.dataset.seriesKey;
       if (!key) return;
-
       if (event.target.checked) {
-        visibleSeries.add(key);
-      } else if (visibleSeries.size > 1) {
-        visibleSeries.delete(key);
+        state.visibleSeries.add(key);
+      } else if (state.visibleSeries.size > 1) {
+        state.visibleSeries.delete(key);
       } else {
         event.target.checked = true;
       }
-
       buildSeriesControls();
-      renderChart(currentHistoryPoints);
+      renderChart();
     });
   });
 }
 
 function computeGapThresholdMs(points) {
   if (points.length < 3) return 15 * 60 * 1000;
-
   const gaps = [];
   for (let index = 1; index < points.length; index += 1) {
     const gap = new Date(points[index].ts_utc).getTime() - new Date(points[index - 1].ts_utc).getTime();
     if (gap > 0) gaps.push(gap);
   }
-
   if (!gaps.length) return 15 * 60 * 1000;
   gaps.sort((a, b) => a - b);
-  const median = gaps[Math.floor(gaps.length / 2)];
-  return Math.max(median * 4, 15 * 60 * 1000);
+  return Math.max(gaps[Math.floor(gaps.length / 2)] * 4, 15 * 60 * 1000);
 }
 
 function buildSmoothSegmentPath(segment) {
@@ -290,7 +293,6 @@ function buildSmoothSegmentPath(segment) {
     const cp2y = p2.y - (p3.y - p1.y) / smoothingFactor;
     path += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
   }
-
   return path;
 }
 
@@ -312,7 +314,6 @@ function pathDataForSeries(points, key, yMin, yMax, width, height, pad, gapThres
       currentSegment = [];
       return;
     }
-
     const pointTs = new Date(point.ts_utc).getTime();
     const x = pad + ((pointTs - minTs) / rangeTs) * (width - pad * 2);
     const y = height - pad - ((point[key] - yMin) / rangeY) * (height - pad * 2);
@@ -329,7 +330,7 @@ function pathDataForSeries(points, key, yMin, yMax, width, height, pad, gapThres
 }
 
 function buildDeficitOverlay(points, width, height, pad, gapThresholdMs) {
-  if (!showSolarDeficit || points.length < 2) return "";
+  if (!state.showSolarDeficit || points.length < 2) return "";
   const minTs = new Date(points[0].ts_utc).getTime();
   const maxTs = new Date(points[points.length - 1].ts_utc).getTime();
   const rangeTs = Math.max(1, maxTs - minTs);
@@ -343,27 +344,34 @@ function buildDeficitOverlay(points, width, height, pad, gapThresholdMs) {
     const hasGap = nextTs - currentTs > gapThresholdMs;
     const hasValues = [current.output_active_power_w, current.pv_input_power_w, next.output_active_power_w, next.pv_input_power_w]
       .every((value) => value !== null && value !== undefined);
-
     if (hasGap || !hasValues) continue;
-
-    const currentShortfall = current.output_active_power_w > current.pv_input_power_w;
-    const nextShortfall = next.output_active_power_w > next.pv_input_power_w;
-    if (!currentShortfall && !nextShortfall) continue;
-
+    if (!(current.output_active_power_w > current.pv_input_power_w || next.output_active_power_w > next.pv_input_power_w)) continue;
     const x1 = pad + ((currentTs - minTs) / rangeTs) * (width - pad * 2);
     const x2 = pad + ((nextTs - minTs) / rangeTs) * (width - pad * 2);
-    overlays.push(
-      `<rect x="${x1.toFixed(1)}" y="${pad}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="${height - pad * 2}" fill="rgba(216,96,43,0.10)"></rect>`
-    );
+    overlays.push(`<rect x="${x1.toFixed(1)}" y="${pad}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="${height - pad * 2}" fill="rgba(216,96,43,0.10)"></rect>`);
   }
 
   return overlays.join("");
 }
 
+function getViewportPoints(points) {
+  if (!points.length) return points;
+  const fullStart = new Date(points[0].ts_utc).getTime();
+  const fullEnd = new Date(points[points.length - 1].ts_utc).getTime();
+  const totalSpan = Math.max(1, fullEnd - fullStart);
+  const viewportSpan = Math.min(totalSpan, state.viewportHours * 3600000);
+  const maxStart = fullEnd - viewportSpan;
+  const viewportStart = fullStart + (maxStart - fullStart) * state.viewportEndFraction;
+  const viewportEnd = viewportStart + viewportSpan;
+  return points.filter((point) => {
+    const ts = new Date(point.ts_utc).getTime();
+    return ts >= viewportStart && ts <= viewportEnd;
+  });
+}
+
 function nearestPoint(points, targetTs) {
   let closest = points[0];
   let closestDistance = Math.abs(new Date(points[0].ts_utc).getTime() - targetTs);
-
   for (const point of points) {
     const distance = Math.abs(new Date(point.ts_utc).getTime() - targetTs);
     if (distance < closestDistance) {
@@ -371,7 +379,6 @@ function nearestPoint(points, targetTs) {
       closestDistance = distance;
     }
   }
-
   return closest;
 }
 
@@ -385,108 +392,152 @@ function positionForPoint(point, minTs, rangeTs, minY, rangeY, width, height, pa
 
 function tooltipHtml(point) {
   const rows = chartSeries
-    .filter((series) => visibleSeries.has(series.key))
-    .map((series) => `
-      <div class="row"><span class="key">${series.label}</span><span>${formatNumber(point[series.key], series.unit)}</span></div>
-    `)
+    .filter((series) => state.visibleSeries.has(series.key))
+    .map((series) => `<div class="row"><span class="key">${series.label}</span><span>${formatNumber(point[series.key], series.unit)}</span></div>`)
     .join("");
-
-  return `
-    <div class="time">${new Date(point.ts_utc).toLocaleString()}</div>
-    ${rows}
-  `;
+  return `<div class="time">${new Date(point.ts_utc).toLocaleString()}</div>${rows}`;
 }
 
-function getViewportPoints(points) {
-  if (!points.length) return points;
-  const fullStart = new Date(points[0].ts_utc).getTime();
-  const fullEnd = new Date(points[points.length - 1].ts_utc).getTime();
-  const totalSpan = Math.max(1, fullEnd - fullStart);
-  const viewportSpan = Math.min(totalSpan, viewportHours * 3600000);
-  const maxStart = fullEnd - viewportSpan;
-  const viewportStart = fullStart + (maxStart - fullStart) * viewportEndFraction;
-  const viewportEnd = viewportStart + viewportSpan;
-  return points.filter((point) => {
-    const ts = new Date(point.ts_utc).getTime();
-    return ts >= viewportStart && ts <= viewportEnd;
-  });
+function updateZoomStatus(totalSpanMs) {
+  zoomStatus.textContent = state.viewportHours < 24
+    ? `Viewing last ${state.viewportHours} hour${state.viewportHours === 1 ? "" : "s"}`
+    : `Viewing last ${state.viewportHours / 24} day${state.viewportHours === 24 ? "" : "s"}`;
+  zoomInButton.disabled = state.viewportHours === state.zoomSteps[0];
+  zoomOutButton.disabled = state.viewportHours === state.zoomSteps[state.zoomSteps.length - 1];
+  timelineSlider.disabled = totalSpanMs / 3600000 <= state.viewportHours;
 }
 
-function renderChart(points) {
-  currentHistoryPoints = points;
+function updateChartPointer(clientX) {
+  const points = getViewportPoints(state.historyPoints);
+  if (!points.length) return;
+
   const width = 1280;
   const height = 460;
   const pad = 64;
-  if (!points.length) {
-    chart.innerHTML = "";
-    chartTooltip.classList.add("hidden");
-    chart.onmousemove = null;
-    chart.onmouseleave = null;
-    return;
-  }
-
-  const totalSpanMs = Math.max(
-    1,
-    new Date(points[points.length - 1].ts_utc).getTime() - new Date(points[0].ts_utc).getTime()
-  );
-  updateZoomStatus(totalSpanMs);
-
-  const viewportPoints = getViewportPoints(points);
-  const activeSeries = chartSeries.filter((series) => visibleSeries.has(series.key));
+  const activeSeries = chartSeries.filter((series) => state.visibleSeries.has(series.key));
   const powerSeries = activeSeries.filter((series) => series.axis === "power");
   const percentSeries = activeSeries.filter((series) => series.axis === "percent");
   const voltageSeries = activeSeries.filter((series) => series.axis === "voltage");
-  const powerValues = powerSeries.flatMap((series) =>
-    viewportPoints.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined)
-  );
-  const percentValues = percentSeries.flatMap((series) =>
-    viewportPoints.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined)
-  );
-  const voltageValues = voltageSeries.flatMap((series) =>
-    viewportPoints.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined)
-  );
+
+  const powerValues = powerSeries.flatMap((series) => points.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined));
+  const percentValues = percentSeries.flatMap((series) => points.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined));
+  const voltageValues = voltageSeries.flatMap((series) => points.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined));
   const powerMin = 0;
   const powerMax = powerValues.length ? Math.max(50, ...powerValues) * 1.1 : 100;
   const percentMin = 0;
   const percentMax = percentValues.length ? Math.max(100, ...percentValues.map((value) => Math.ceil(value / 10) * 10)) : 100;
   const voltageMin = voltageValues.length ? Math.floor(Math.min(...voltageValues) - 1) : 40;
   const voltageMax = voltageValues.length ? Math.ceil(Math.max(...voltageValues) + 1) : 60;
-  const minTs = new Date(viewportPoints[0].ts_utc).getTime();
-  const maxTs = new Date(viewportPoints[viewportPoints.length - 1].ts_utc).getTime();
+
+  const minTs = new Date(points[0].ts_utc).getTime();
+  const maxTs = new Date(points[points.length - 1].ts_utc).getTime();
   const rangeTs = Math.max(1, maxTs - minTs);
   const powerRange = Math.max(1, powerMax - powerMin);
   const percentRange = Math.max(1, percentMax - percentMin);
   const voltageRange = Math.max(1, voltageMax - voltageMin);
+
+  const bounds = chart.getBoundingClientRect();
+  const relativeX = ((clientX - bounds.left) / bounds.width) * width;
+  const ratio = Math.max(0, Math.min(1, (relativeX - pad) / (width - pad * 2)));
+  const targetTs = minTs + ratio * rangeTs;
+  const point = nearestPoint(points, targetTs);
+  const x = pad + ((new Date(point.ts_utc).getTime() - minTs) / rangeTs) * (width - pad * 2);
+
+  const cursorLine = document.getElementById("chart-cursor-line");
+  const dots = Object.fromEntries(activeSeries.map((series) => [series.key, document.getElementById(`dot-${series.key}`)]));
+  cursorLine.setAttribute("x1", x.toFixed(1));
+  cursorLine.setAttribute("x2", x.toFixed(1));
+  cursorLine.setAttribute("opacity", "1");
+
+  activeSeries.forEach((series) => {
+    const minY = series.axis === "power" ? powerMin : series.axis === "percent" ? percentMin : voltageMin;
+    const rangeY = series.axis === "power" ? powerRange : series.axis === "percent" ? percentRange : voltageRange;
+    const pos = positionForPoint(point, minTs, rangeTs, minY, rangeY, width, height, pad, series.key);
+    if (pos) {
+      dots[series.key].setAttribute("cx", pos.x.toFixed(1));
+      dots[series.key].setAttribute("cy", pos.y.toFixed(1));
+      dots[series.key].setAttribute("opacity", "1");
+    } else {
+      dots[series.key].setAttribute("opacity", "0");
+    }
+  });
+
+  chartTooltip.innerHTML = tooltipHtml(point);
+  chartTooltip.classList.remove("hidden");
+  chartTooltip.classList.toggle("locked", state.chartPointer.locked);
+  const tooltipLeft = Math.min(bounds.width - 240, Math.max(12, (x / width) * bounds.width + 12));
+  chartTooltip.style.left = `${tooltipLeft}px`;
+  state.chartPointer.x = clientX;
+}
+
+function clearChartPointer() {
+  const cursorLine = document.getElementById("chart-cursor-line");
+  if (cursorLine) cursorLine.setAttribute("opacity", "0");
+  chart.querySelectorAll("circle[id^='dot-']").forEach((dot) => dot.setAttribute("opacity", "0"));
+  chartTooltip.classList.add("hidden");
+  chartTooltip.classList.remove("locked");
+  state.chartPointer.x = null;
+}
+
+function renderChart() {
+  const points = state.historyPoints;
+  const width = 1280;
+  const height = 460;
+  const pad = 64;
+
+  if (!points.length) {
+    chart.innerHTML = "";
+    clearChartPointer();
+    return;
+  }
+
+  const totalSpanMs = Math.max(1, new Date(points[points.length - 1].ts_utc).getTime() - new Date(points[0].ts_utc).getTime());
+  updateZoomStatus(totalSpanMs);
+  const viewportPoints = getViewportPoints(points);
+  if (!viewportPoints.length) {
+    chart.innerHTML = "";
+    clearChartPointer();
+    return;
+  }
+
+  const activeSeries = chartSeries.filter((series) => state.visibleSeries.has(series.key));
+  const powerSeries = activeSeries.filter((series) => series.axis === "power");
+  const percentSeries = activeSeries.filter((series) => series.axis === "percent");
+  const voltageSeries = activeSeries.filter((series) => series.axis === "voltage");
+
+  const powerValues = powerSeries.flatMap((series) => viewportPoints.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined));
+  const percentValues = percentSeries.flatMap((series) => viewportPoints.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined));
+  const voltageValues = voltageSeries.flatMap((series) => viewportPoints.map((point) => point[series.key]).filter((value) => value !== null && value !== undefined));
+
+  const powerMin = 0;
+  const powerMax = powerValues.length ? Math.max(50, ...powerValues) * 1.1 : 100;
+  const percentMin = 0;
+  const percentMax = percentValues.length ? Math.max(100, ...percentValues.map((value) => Math.ceil(value / 10) * 10)) : 100;
+  const voltageMin = voltageValues.length ? Math.floor(Math.min(...voltageValues) - 1) : 40;
+  const voltageMax = voltageValues.length ? Math.ceil(Math.max(...voltageValues) + 1) : 60;
   const gapThresholdMs = computeGapThresholdMs(viewportPoints);
   const deficitOverlay = buildDeficitOverlay(viewportPoints, width, height, pad, gapThresholdMs);
-
   const horizontalGuides = [0.2, 0.4, 0.6, 0.8].map((fraction) => {
     const y = pad + (height - pad * 2) * fraction;
     return `<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" stroke="rgba(31,35,33,0.10)" stroke-width="1" />`;
   }).join("");
 
   const axisValues = [0, 0.25, 0.5, 0.75, 1];
-  const leftAxisLabels = powerSeries.length
-    ? axisValues.map((fraction) => {
-      const y = height - pad - fraction * (height - pad * 2);
-      const watts = Math.round(powerMin + fraction * powerRange);
-      return `<text x="${pad - 14}" y="${y + 6}" text-anchor="end" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${watts}W</text>`;
-    }).join("")
-    : "";
-  const rightAxisLabels = percentSeries.length
-    ? axisValues.map((fraction) => {
-      const y = height - pad - fraction * (height - pad * 2);
-      const percent = Math.round(percentMin + fraction * percentRange);
-      return `<text x="${width - pad + 14}" y="${y + 6}" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${percent}%</text>`;
-    }).join("")
-    : "";
-  const voltageAxisLabels = voltageSeries.length
-    ? axisValues.map((fraction) => {
-      const y = height - pad - fraction * (height - pad * 2);
-      const volts = (voltageMin + fraction * voltageRange).toFixed(1);
-      return `<text x="${pad + 18}" y="${y + 6}" font-size="15" font-weight="700" fill="rgba(21,122,110,0.95)">${volts}V</text>`;
-    }).join("")
-    : "";
+  const leftAxisLabels = powerSeries.length ? axisValues.map((fraction) => {
+    const y = height - pad - fraction * (height - pad * 2);
+    const watts = Math.round(powerMin + fraction * (powerMax - powerMin));
+    return `<text x="${pad - 14}" y="${y + 6}" text-anchor="end" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${watts}W</text>`;
+  }).join("") : "";
+  const rightAxisLabels = percentSeries.length ? axisValues.map((fraction) => {
+    const y = height - pad - fraction * (height - pad * 2);
+    const percent = Math.round(percentMin + fraction * (percentMax - percentMin));
+    return `<text x="${width - pad + 14}" y="${y + 6}" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${percent}%</text>`;
+  }).join("") : "";
+  const voltageAxisLabels = voltageSeries.length ? axisValues.map((fraction) => {
+    const y = height - pad - fraction * (height - pad * 2);
+    const volts = (voltageMin + fraction * (voltageMax - voltageMin)).toFixed(1);
+    return `<text x="${pad + 18}" y="${y + 6}" font-size="15" font-weight="700" fill="rgba(21,122,110,0.95)">${volts}V</text>`;
+  }).join("") : "";
 
   const polylines = activeSeries.map((series) => {
     const yMin = series.axis === "power" ? powerMin : series.axis === "percent" ? percentMin : voltageMin;
@@ -494,9 +545,7 @@ function renderChart(points) {
     return `<path fill="none" stroke="${series.colorVar}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="${pathDataForSeries(viewportPoints, series.key, yMin, yMax, width, height, pad, gapThresholdMs)}"></path>`;
   }).join("");
 
-  const circles = activeSeries.map((series) => {
-    return `<circle id="dot-${series.key}" r="5" fill="${series.colorVar}" opacity="0"></circle>`;
-  }).join("");
+  const circles = activeSeries.map((series) => `<circle id="dot-${series.key}" r="5" fill="${series.colorVar}" opacity="0"></circle>`).join("");
 
   chart.innerHTML = `
     <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
@@ -510,56 +559,11 @@ function renderChart(points) {
     ${circles}
   `;
 
-  const cursorLine = document.getElementById("chart-cursor-line");
-  const dots = Object.fromEntries(
-    activeSeries.map((series) => [series.key, document.getElementById(`dot-${series.key}`)])
-  );
-
-  chart.onmousemove = (event) => {
-    const bounds = chart.getBoundingClientRect();
-    const relativeX = ((event.clientX - bounds.left) / bounds.width) * width;
-    const ratio = Math.max(0, Math.min(1, (relativeX - pad) / (width - pad * 2)));
-    const targetTs = minTs + ratio * rangeTs;
-    const point = nearestPoint(viewportPoints, targetTs);
-    const x = pad + ((new Date(point.ts_utc).getTime() - minTs) / rangeTs) * (width - pad * 2);
-
-    cursorLine.setAttribute("x1", x.toFixed(1));
-    cursorLine.setAttribute("x2", x.toFixed(1));
-    cursorLine.setAttribute("opacity", "1");
-
-    const positions = Object.fromEntries(
-      activeSeries.map((series) => {
-        const minY = series.axis === "power" ? powerMin : series.axis === "percent" ? percentMin : voltageMin;
-        const rangeY = series.axis === "power" ? powerRange : series.axis === "percent" ? percentRange : voltageRange;
-        return [
-          series.key,
-          positionForPoint(point, minTs, rangeTs, minY, rangeY, width, height, pad, series.key),
-        ];
-      })
-    );
-
-    Object.entries(dots).forEach(([key, dot]) => {
-      const pos = positions[key];
-      if (pos) {
-        dot.setAttribute("cx", pos.x.toFixed(1));
-        dot.setAttribute("cy", pos.y.toFixed(1));
-        dot.setAttribute("opacity", "1");
-      } else {
-        dot.setAttribute("opacity", "0");
-      }
-    });
-
-    chartTooltip.innerHTML = tooltipHtml(point);
-    chartTooltip.classList.remove("hidden");
-    const tooltipLeft = Math.min(bounds.width - 220, Math.max(12, (x / width) * bounds.width + 12));
-    chartTooltip.style.left = `${tooltipLeft}px`;
-  };
-
-  chart.onmouseleave = () => {
-    cursorLine.setAttribute("opacity", "0");
-    Object.values(dots).forEach((dot) => dot.setAttribute("opacity", "0"));
-    chartTooltip.classList.add("hidden");
-  };
+  if (state.chartPointer.locked && state.chartPointer.x !== null) {
+    updateChartPointer(state.chartPointer.x);
+  } else {
+    clearChartPointer();
+  }
 }
 
 async function fetchJson(url) {
@@ -570,51 +574,79 @@ async function fetchJson(url) {
 
 async function refreshLive() {
   const payload = await fetchJson("/api/live");
-  currentLiveSample = payload.sample || {};
-  renderCards(payload.sample || {});
+  state.livePayload = payload;
+  state.currentLiveSample = payload.sample || {};
+  renderCards(state.currentLiveSample);
   renderConnection(payload);
-  renderOverview(currentLiveSample, currentHistoryPoints);
-  return payload;
+  renderOverview();
 }
 
 async function refreshHistory() {
   const payload = await fetchJson("/api/history?hours=168");
-  renderChart(payload.points || []);
-  renderOverview(currentLiveSample, payload.points || []);
-  return payload;
+  state.historyPoints = payload.points || [];
+  renderChart();
+  renderOverview();
+}
+
+async function refreshAlerts() {
+  const payload = await fetchJson("/api/alerts");
+  state.alertsPayload = payload;
+  renderAlerts();
 }
 
 function stepZoom(direction) {
-  const currentIndex = zoomSteps.indexOf(viewportHours);
-  const nextIndex = Math.min(
-    zoomSteps.length - 1,
-    Math.max(0, currentIndex + direction)
-  );
-  viewportHours = zoomSteps[nextIndex];
-  renderChart(currentHistoryPoints);
+  const currentIndex = state.zoomSteps.indexOf(state.viewportHours);
+  const nextIndex = Math.min(state.zoomSteps.length - 1, Math.max(0, currentIndex + direction));
+  state.viewportHours = state.zoomSteps[nextIndex];
+  renderChart();
 }
 
-function bindChartTouches() {
+function bindNavigation() {
+  pageTabs.forEach((tab) => {
+    tab.addEventListener("click", () => setActivePage(tab.dataset.page));
+  });
+}
+
+function bindChartInteractions() {
   let lastTouchX = null;
+
+  chart.addEventListener("mousemove", (event) => {
+    if (state.chartPointer.locked) return;
+    updateChartPointer(event.clientX);
+  });
+
+  chart.addEventListener("mouseleave", () => {
+    if (!state.chartPointer.locked) clearChartPointer();
+  });
+
+  chart.addEventListener("click", (event) => {
+    if (state.chartPointer.locked) {
+      state.chartPointer.locked = false;
+      clearChartPointer();
+      return;
+    }
+    state.chartPointer.locked = true;
+    updateChartPointer(event.clientX);
+  });
 
   chart.addEventListener("touchstart", (event) => {
     if (event.touches.length !== 1) return;
     lastTouchX = event.touches[0].clientX;
+    if (!state.chartPointer.locked) updateChartPointer(lastTouchX);
   }, { passive: true });
 
   chart.addEventListener("touchmove", (event) => {
-    if (event.touches.length !== 1 || currentHistoryPoints.length < 2) return;
+    if (event.touches.length !== 1 || state.historyPoints.length < 2 || state.chartPointer.locked) return;
     const touchX = event.touches[0].clientX;
     if (lastTouchX === null) {
       lastTouchX = touchX;
       return;
     }
-
     const delta = lastTouchX - touchX;
     const nextValue = Math.max(0, Math.min(1000, Number(timelineSlider.value) + delta * 1.8));
     timelineSlider.value = String(nextValue);
-    viewportEndFraction = nextValue / 1000;
-    renderChart(currentHistoryPoints);
+    state.viewportEndFraction = nextValue / 1000;
+    renderChart();
     lastTouchX = touchX;
   }, { passive: true });
 
@@ -623,30 +655,34 @@ function bindChartTouches() {
   }, { passive: true });
 }
 
-async function tick() {
-  try {
-    const [livePayload, historyPayload] = await Promise.all([refreshLive(), refreshHistory()]);
-    renderOverview(livePayload.sample || {}, historyPayload.points || []);
-  } catch (error) {
-    connectionStatus.textContent = "Dashboard offline";
-    connectionStatus.className = "status-pill warn";
-    lastUpdated.textContent = error.message;
-  }
+function bindControls() {
+  zoomInButton.addEventListener("click", () => stepZoom(-1));
+  zoomOutButton.addEventListener("click", () => stepZoom(1));
+  timelineSlider.addEventListener("input", () => {
+    state.viewportEndFraction = Number(timelineSlider.value) / 1000;
+    renderChart();
+  });
+  deficitToggle.checked = state.showSolarDeficit;
+  deficitToggle.addEventListener("change", () => {
+    state.showSolarDeficit = deficitToggle.checked;
+    renderChart();
+  });
 }
 
-deficitToggle.checked = showSolarDeficit;
-deficitToggle.addEventListener("change", () => {
-  showSolarDeficit = deficitToggle.checked;
-  renderChart(currentHistoryPoints);
-});
+async function initialLoad() {
+  await Promise.all([refreshLive(), refreshHistory(), refreshAlerts()]);
+}
+
+bindNavigation();
+bindControls();
+bindChartInteractions();
 buildSeriesControls();
-zoomInButton.addEventListener("click", () => stepZoom(-1));
-zoomOutButton.addEventListener("click", () => stepZoom(1));
-timelineSlider.addEventListener("input", () => {
-  viewportEndFraction = Number(timelineSlider.value) / 1000;
-  renderChart(currentHistoryPoints);
+setActivePage(state.page);
+initialLoad().catch((error) => {
+  connectionStatus.textContent = "Dashboard offline";
+  connectionStatus.className = "status-pill warn";
+  lastUpdated.textContent = error.message;
 });
-bindChartTouches();
-tick();
-setInterval(refreshLive, 3000);
-setInterval(refreshHistory, 60000);
+setInterval(() => refreshLive().catch(() => {}), 3000);
+setInterval(() => refreshHistory().catch(() => {}), 60000);
+setInterval(() => refreshAlerts().catch(() => {}), 30000);

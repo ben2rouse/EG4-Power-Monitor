@@ -7,7 +7,8 @@ This project runs directly on a Raspberry Pi, polls your EG4 inverter over the e
 
 - Polls `QPIGS` from the inverter on `/dev/ttyUSB0`
 - Stores readings every few seconds in `data/power_monitor.sqlite3`
-- Serves a live dashboard with phone-friendly cards and history graphs
+- Serves a live dashboard with Dashboard / History / Alerts pages
+- Records built-in alerts for low battery, high load, solar shortfall support, and inverter communication issues
 - Works with a single Python process and one dependency: `pyserial`
 
 ## Quick start on the Pi
@@ -57,7 +58,13 @@ POWER_MONITOR_SERIAL_PORT=/dev/ttyUSB0
 POWER_MONITOR_BAUD_RATE=2400
 POWER_MONITOR_POLL_SECONDS=5
 POWER_MONITOR_PORT=8080
+POWER_MONITOR_LOW_BATTERY_PERCENT=25
+POWER_MONITOR_HIGH_LOAD_WATTS=4000
+POWER_MONITOR_ALERT_COOLDOWN_MINUTES=20
+POWER_MONITOR_NTFY_TOPIC_URL=
 ```
+
+If you set `POWER_MONITOR_NTFY_TOPIC_URL` to an `ntfy` topic URL, the built-in alerts will also try to send push notifications there.
 
 ## Run at boot with systemd
 
