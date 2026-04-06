@@ -10,6 +10,7 @@ const zoomInButton = document.getElementById("zoom-in");
 const zoomOutButton = document.getElementById("zoom-out");
 const zoomStatus = document.getElementById("zoom-status");
 const timelineSlider = document.getElementById("timeline-slider");
+const deficitToggle = document.getElementById("deficit-toggle");
 
 const metrics = [
   ["Load", "output_active_power_w", "W"],
@@ -34,6 +35,7 @@ let currentHistoryPoints = [];
 const zoomSteps = [1, 3, 6, 12, 24, 72, 168];
 let viewportHours = 24;
 let viewportEndFraction = 1;
+let showSolarDeficit = true;
 
 function formatNumber(value, unit) {
   if (value === null || value === undefined || Number.isNaN(value)) return "--";
@@ -159,6 +161,28 @@ function computeGapThresholdMs(points) {
   return Math.max(median * 4, 15 * 60 * 1000);
 }
 
+function buildSmoothSegmentPath(segment) {
+  if (!segment.length) return "";
+  if (segment.length === 1) {
+    return `M${segment[0].x.toFixed(1)},${segment[0].y.toFixed(1)}`;
+  }
+
+  let path = `M${segment[0].x.toFixed(1)},${segment[0].y.toFixed(1)}`;
+  for (let index = 0; index < segment.length - 1; index += 1) {
+    const p0 = segment[index - 1] || segment[index];
+    const p1 = segment[index];
+    const p2 = segment[index + 1];
+    const p3 = segment[index + 2] || p2;
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    path += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+
+  return path;
+}
+
 function pathDataForSeries(points, key, yMin, yMax, width, height, pad, gapThresholdMs) {
   const values = points.map((point) => point[key]).filter((value) => value !== null && value !== undefined);
   if (!values.length) return "";
@@ -167,23 +191,62 @@ function pathDataForSeries(points, key, yMin, yMax, width, height, pad, gapThres
   const rangeTs = Math.max(1, maxTs - minTs);
   const rangeY = Math.max(1, yMax - yMin);
   let previousTs = null;
-  let path = "";
+  let currentSegment = [];
+  const segments = [];
 
   points.forEach((point) => {
     if (point[key] === null || point[key] === undefined) {
       previousTs = null;
+      if (currentSegment.length) segments.push(currentSegment);
+      currentSegment = [];
       return;
     }
 
     const pointTs = new Date(point.ts_utc).getTime();
     const x = pad + ((pointTs - minTs) / rangeTs) * (width - pad * 2);
     const y = height - pad - ((point[key] - yMin) / rangeY) * (height - pad * 2);
-    const command = previousTs === null || pointTs - previousTs > gapThresholdMs ? "M" : "L";
-    path += `${command}${x.toFixed(1)},${y.toFixed(1)} `;
+    if (previousTs === null || pointTs - previousTs > gapThresholdMs) {
+      if (currentSegment.length) segments.push(currentSegment);
+      currentSegment = [];
+    }
+    currentSegment.push({ x, y });
     previousTs = pointTs;
   });
 
-  return path.trim();
+  if (currentSegment.length) segments.push(currentSegment);
+  return segments.map((segment) => buildSmoothSegmentPath(segment)).join(" ");
+}
+
+function buildDeficitOverlay(points, width, height, pad, gapThresholdMs) {
+  if (!showSolarDeficit || points.length < 2) return "";
+  const minTs = new Date(points[0].ts_utc).getTime();
+  const maxTs = new Date(points[points.length - 1].ts_utc).getTime();
+  const rangeTs = Math.max(1, maxTs - minTs);
+  const overlays = [];
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const currentTs = new Date(current.ts_utc).getTime();
+    const nextTs = new Date(next.ts_utc).getTime();
+    const hasGap = nextTs - currentTs > gapThresholdMs;
+    const hasValues = [current.output_active_power_w, current.pv_input_power_w, next.output_active_power_w, next.pv_input_power_w]
+      .every((value) => value !== null && value !== undefined);
+
+    if (hasGap || !hasValues) continue;
+
+    const currentShortfall = current.output_active_power_w > current.pv_input_power_w;
+    const nextShortfall = next.output_active_power_w > next.pv_input_power_w;
+    if (!currentShortfall && !nextShortfall) continue;
+
+    const x1 = pad + ((currentTs - minTs) / rangeTs) * (width - pad * 2);
+    const x2 = pad + ((nextTs - minTs) / rangeTs) * (width - pad * 2);
+    overlays.push(
+      `<rect x="${x1.toFixed(1)}" y="${pad}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="${height - pad * 2}" fill="rgba(216,96,43,0.10)"></rect>`
+    );
+  }
+
+  return overlays.join("");
 }
 
 function nearestPoint(points, targetTs) {
@@ -240,9 +303,9 @@ function getViewportPoints(points) {
 
 function renderChart(points) {
   currentHistoryPoints = points;
-  const width = 1200;
-  const height = 420;
-  const pad = 28;
+  const width = 1280;
+  const height = 460;
+  const pad = 64;
   if (!points.length) {
     chart.innerHTML = "";
     chartTooltip.classList.add("hidden");
@@ -284,6 +347,7 @@ function renderChart(points) {
   const percentRange = Math.max(1, percentMax - percentMin);
   const voltageRange = Math.max(1, voltageMax - voltageMin);
   const gapThresholdMs = computeGapThresholdMs(viewportPoints);
+  const deficitOverlay = buildDeficitOverlay(viewportPoints, width, height, pad, gapThresholdMs);
 
   const horizontalGuides = [0.2, 0.4, 0.6, 0.8].map((fraction) => {
     const y = pad + (height - pad * 2) * fraction;
@@ -295,21 +359,21 @@ function renderChart(points) {
     ? axisValues.map((fraction) => {
       const y = height - pad - fraction * (height - pad * 2);
       const watts = Math.round(powerMin + fraction * powerRange);
-      return `<text x="${pad - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="rgba(88,98,100,0.85)">${watts}W</text>`;
+      return `<text x="${pad - 14}" y="${y + 6}" text-anchor="end" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${watts}W</text>`;
     }).join("")
     : "";
   const rightAxisLabels = percentSeries.length
     ? axisValues.map((fraction) => {
       const y = height - pad - fraction * (height - pad * 2);
       const percent = Math.round(percentMin + fraction * percentRange);
-      return `<text x="${width - pad + 6}" y="${y + 4}" font-size="11" fill="rgba(88,98,100,0.85)">${percent}%</text>`;
+      return `<text x="${width - pad + 14}" y="${y + 6}" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${percent}%</text>`;
     }).join("")
     : "";
   const voltageAxisLabels = voltageSeries.length
     ? axisValues.map((fraction) => {
       const y = height - pad - fraction * (height - pad * 2);
       const volts = (voltageMin + fraction * voltageRange).toFixed(1);
-      return `<text x="${pad + 8}" y="${y + 4}" font-size="11" fill="rgba(21,122,110,0.95)">${volts}V</text>`;
+      return `<text x="${pad + 18}" y="${y + 6}" font-size="15" font-weight="700" fill="rgba(21,122,110,0.95)">${volts}V</text>`;
     }).join("")
     : "";
 
@@ -326,6 +390,7 @@ function renderChart(points) {
   chart.innerHTML = `
     <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
     ${horizontalGuides}
+    ${deficitOverlay}
     ${leftAxisLabels}
     ${rightAxisLabels}
     ${voltageAxisLabels}
@@ -452,6 +517,11 @@ async function tick() {
   }
 }
 
+deficitToggle.checked = showSolarDeficit;
+deficitToggle.addEventListener("change", () => {
+  showSolarDeficit = deficitToggle.checked;
+  renderChart(currentHistoryPoints);
+});
 buildSeriesControls();
 zoomInButton.addEventListener("click", () => stepZoom(-1));
 zoomOutButton.addEventListener("click", () => stepZoom(1));

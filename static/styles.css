@@ -177,6 +177,22 @@ h2 {
   min-width: 140px;
 }
 
+.overlay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.overlay-toggle input {
+  margin: 0;
+}
+
 .series-picker {
   display: flex;
   flex-wrap: wrap;
@@ -208,12 +224,12 @@ h2 {
   border: 1px solid var(--line);
   padding: 12px;
   overflow: hidden;
-  min-height: 444px;
+  min-height: 468px;
 }
 
 #history-chart {
   width: 100%;
-  height: 420px;
+  height: 444px;
   display: block;
   touch-action: none;
 }
@@ -331,13 +347,17 @@ code {
     justify-content: flex-start;
   }
 
+  .overlay-toggle {
+    font-size: 0.9rem;
+  }
+
   .chart-wrap {
     min-height: 384px;
     padding: 10px;
   }
 
   #history-chart {
-    height: 360px;
+    height: 380px;
   }
 
   .zoom-button {
