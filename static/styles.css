@@ -1,19 +1,19 @@
 :root {
-  --bg: #f5efe3;
-  --bg-accent: #e1d7bf;
-  --ink: #1f2321;
-  --muted: #586264;
-  --panel: rgba(255, 252, 245, 0.9);
-  --line: rgba(31, 35, 33, 0.08);
-  --shadow: 0 20px 60px rgba(47, 42, 31, 0.12);
-  --load: #d8602b;
-  --solar: #e0a62f;
-  --battery: #2c8a73;
-  --voltage: #157a6e;
-  --level: #3c5ccf;
-  --ok: #266c4f;
-  --warn: #a0491d;
-  --critical: #9d2b29;
+  --bg: #111318;
+  --bg-accent: #1a1e25;
+  --ink: #e2e4e9;
+  --muted: #9aa0a6;
+  --panel: rgba(26, 30, 38, 0.92);
+  --line: rgba(255, 255, 255, 0.1);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  --load: #f07430;
+  --solar: #f0b830;
+  --battery: #3aae90;
+  --voltage: #2a9e8c;
+  --level: #5878e8;
+  --ok: #3aae78;
+  --warn: #e06030;
+  --critical: #e03a38;
 }
 
 * {
@@ -25,8 +25,8 @@ body {
   color: var(--ink);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.8), transparent 28%),
-    linear-gradient(135deg, var(--bg) 0%, #efe4ca 48%, var(--bg-accent) 100%);
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.03), transparent 28%),
+    linear-gradient(135deg, var(--bg) 0%, #161b24 48%, var(--bg-accent) 100%);
   min-height: 100vh;
 }
 
@@ -89,13 +89,13 @@ h2 {
   gap: 10px;
   padding: 10px 16px;
   border-radius: 999px;
-  background: rgba(38, 108, 79, 0.08);
+  background: rgba(38, 108, 79, 0.2);
   color: var(--ok);
   font-weight: 700;
 }
 
 .status-pill.warn {
-  background: rgba(160, 73, 29, 0.1);
+  background: rgba(160, 73, 29, 0.2);
   color: var(--warn);
 }
 
@@ -116,7 +116,7 @@ h2 {
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: rgba(255, 252, 245, 0.82);
+  background: rgba(26, 30, 40, 0.9);
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow);
 }
@@ -133,7 +133,7 @@ h2 {
 }
 
 .page-tab.active {
-  background: rgba(31, 35, 33, 0.08);
+  background: rgba(255, 255, 255, 0.1);
   color: var(--ink);
 }
 
@@ -187,7 +187,7 @@ h2 {
 
 .overview-card {
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .overview-card .value {
@@ -227,7 +227,7 @@ h2 {
 
 .zoom-button {
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--ink);
   border-radius: 999px;
   padding: 10px 16px;
@@ -249,7 +249,7 @@ h2 {
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--ink);
   font-size: 0.92rem;
 }
@@ -270,7 +270,7 @@ h2 {
   position: relative;
   margin-top: 18px;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--line);
   padding: 12px;
   overflow: hidden;
@@ -399,7 +399,8 @@ h2 {
   border-radius: 12px;
   padding: 11px 12px;
   font: inherit;
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
 }
 
 .form-field-wide {
@@ -437,7 +438,7 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 22px;
   padding: 16px;
-  background: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .alert-card.warning {
@@ -483,7 +484,7 @@ h2 {
   border-radius: 22px;
   padding: 20px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 @media (max-width: 760px) {
