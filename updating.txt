@@ -1,2 +1,15 @@
 Mac:
 
+cd "/Users/benjaminrouse/Desktop/Random Files/Power Monitor"
+git add .
+git commit -m "Update dashboard"
+git push
+
+
+Pi:
+
+cd ~/Desktop/EG4-Power-Monitor
+git pull
+sudo systemctl restart power-monitor.service
+sleep 3
+curl http://127.0.0.1:8080/api/status

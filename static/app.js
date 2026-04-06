@@ -277,16 +277,17 @@ function buildSmoothSegmentPath(segment) {
     return `M${segment[0].x.toFixed(1)},${segment[0].y.toFixed(1)}`;
   }
 
+  const smoothingFactor = 4;
   let path = `M${segment[0].x.toFixed(1)},${segment[0].y.toFixed(1)}`;
   for (let index = 0; index < segment.length - 1; index += 1) {
     const p0 = segment[index - 1] || segment[index];
     const p1 = segment[index];
     const p2 = segment[index + 1];
     const p3 = segment[index + 2] || p2;
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = p1.y + (p2.y - p0.y) / 6;
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    const cp1x = p1.x + (p2.x - p0.x) / smoothingFactor;
+    const cp1y = p1.y + (p2.y - p0.y) / smoothingFactor;
+    const cp2x = p2.x - (p3.x - p1.x) / smoothingFactor;
+    const cp2y = p2.y - (p3.y - p1.y) / smoothingFactor;
     path += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
   }
 
