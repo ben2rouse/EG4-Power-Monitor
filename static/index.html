@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EG4 Power Monitor</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">EG4 6500 Dashboard</p>
+          <h1>Live inverter, battery, and solar data from the Raspberry Pi.</h1>
+        </div>
+        <div class="hero-status">
+          <div class="status-pill" id="connection-status">Connecting...</div>
+          <div class="status-meta" id="last-updated">Waiting for first sample</div>
+        </div>
+      </section>
+
+      <section class="cards" id="metric-cards"></section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">History</p>
+            <h2>Load, solar, and capacity over time</h2>
+          </div>
+          <div class="chart-controls">
+            <div class="zoom-controls">
+              <button type="button" class="zoom-button" id="zoom-out">Zoom Out</button>
+              <div class="zoom-status" id="zoom-status">Viewing last 24 hours</div>
+              <button type="button" class="zoom-button" id="zoom-in">Zoom In</button>
+            </div>
+            <div class="series-picker" id="series-picker"></div>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <svg id="history-chart" viewBox="0 0 1200 420" preserveAspectRatio="none"></svg>
+          <div class="chart-tooltip hidden" id="chart-tooltip"></div>
+        </div>
+        <div class="timeline-controls">
+          <label class="pan-range">
+            <span>Timeline</span>
+            <input type="range" id="timeline-slider" min="0" max="1000" value="1000" />
+          </label>
+        </div>
+        <div class="legend" id="chart-legend"></div>
+      </section>
+
+      <section class="panel">
+        <div>
+          <p class="eyebrow">Connection</p>
+          <div class="kv-list" id="connection-details"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

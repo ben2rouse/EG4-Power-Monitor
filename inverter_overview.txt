@@ -1,0 +1,132 @@
+WHAT HAS BEEN ACCOMPLISHED: INVERTER DATA COMMUNICATION OVERVIEW
+
+1. PHYSICAL CONNECTION
+A USB to RS232 adapter is connected between the Raspberry Pi and the inverter.
+The inverter uses an RJ45 port with a proprietary RS232 pinout.
+The correct cable ensures transmit (TX), receive (RX), and ground (GND) are properly wired.
+
+Linux recognizes the adapter as:
+    /dev/ttyUSB0
+
+This was confirmed via system logs showing the USB serial device attaching successfully.
+
+---
+
+2. SERIAL COMMUNICATION SETUP
+A serial connection was established using:
+
+- Device: /dev/ttyUSB0
+- Baud rate: 2400
+- Data format: 8N1 (8 data bits, no parity, 1 stop bit)
+
+This matches the inverter’s communication requirements.
+
+---
+
+3. INVERTER COMMAND PROTOCOL
+The inverter uses a text-based command protocol.
+
+Example command:
+    QPIGS
+
+This command requests real-time system status.
+
+Commands are sent with a carriage return:
+    QPIGS\r
+
+In some implementations, a CRC (checksum) is required, but in this case the inverter responded without strict enforcement.
+
+---
+
+4. REQUEST / RESPONSE CYCLE
+The communication loop works as follows:
+
+- Raspberry Pi sends command (QPIGS)
+- Inverter responds with a structured data string
+
+This allows continuous polling of live system data.
+
+---
+
+5. RESPONSE DATA FORMAT
+Example response:
+
+(000.0 00.0 119.9 60.0 1726 1713 026 366 52.90 000 077 0062 02.3 307.2 00.00 00020 00010110 00 00 00721 010...)
+
+Characteristics:
+- Wrapped in parentheses
+- Space-separated values
+- Ends with checksum and carriage return
+
+---
+
+6. MEANING OF DATA VALUES
+Each position corresponds to a measurement:
+
+- Grid voltage
+- Grid frequency
+- Output voltage
+- Output frequency
+- Output apparent power (VA)
+- Output real power (Watts)
+- Load percentage
+- Battery voltage
+- Battery capacity (%)
+- PV (solar) voltage
+- Additional status and diagnostic fields
+
+This provides real-time insight into:
+- Power usage
+- Solar input
+- Battery state
+- System load
+
+---
+
+7. ERROR HANDLING OBSERVED
+A response like:
+    (NAK...)
+
+means the command was rejected.
+
+This was resolved by:
+- Using correct baud rate (2400)
+- Ensuring stable serial connection
+
+---
+
+8. CURRENT SYSTEM CAPABILITY
+The system can now:
+
+- Communicate directly with the inverter
+- Request live status data
+- Receive structured responses
+
+No external software or cloud services are required.
+
+---
+
+9. CURRENT DATA FLOW
+
+Raspberry Pi → sends QPIGS
+Inverter → returns system data
+Pi → receives raw response
+
+---
+
+10. NEXT DEVELOPMENT STEPS (FOR IMPLEMENTATION)
+
+To build a full monitoring system:
+
+1. Continuously poll the inverter (loop)
+2. Parse response values into structured data
+3. Store data (CSV or database)
+4. Visualize data (graphs/dashboard)
+5. Add alerting (battery low, load spikes, etc.)
+
+---
+
+SUMMARY
+
+A direct serial communication link has been successfully established with the inverter.
+The system can query real-time operational data using the inverter’s native command protocol (QPIGS), forming the foundation for a complete monitoring and automation system.
