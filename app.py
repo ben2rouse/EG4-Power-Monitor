@@ -414,6 +414,21 @@ class AlertManager:
             None,
         )
 
+    def send_test_notification(self, ts_utc: datetime) -> bool:
+        title = "Power monitor test notification"
+        message = "Test notification from EG4 Power Monitor. If you received this, push delivery is working."
+        delivered = self._deliver_notification(title, message)
+        self.database.insert_alert(
+            ts_utc,
+            "info",
+            "test_notification",
+            title,
+            message,
+            None,
+            delivered,
+        )
+        return delivered
+
     def evaluate_forecast_advisory(self, ts_utc: datetime, sample: dict[str, Any]) -> None:
         if self.settings.forecast_latitude is None or self.settings.forecast_longitude is None:
             return
@@ -581,6 +596,12 @@ class PowerMonitorState:
         high_load = self.database.fetch_config("high_load_watts")
         cooldown = self.database.fetch_config("alert_cooldown_minutes")
         ntfy_topic = self.database.fetch_config("ntfy_topic_url")
+        forecast_latitude = self.database.fetch_config("forecast_latitude")
+        forecast_longitude = self.database.fetch_config("forecast_longitude")
+        forecast_check_hours = self.database.fetch_config("forecast_check_hours")
+        forecast_cloud_threshold_percent = self.database.fetch_config("forecast_cloud_threshold_percent")
+        forecast_evening_advisory_hour = self.database.fetch_config("forecast_evening_advisory_hour")
+        forecast_reserve_battery_percent = self.database.fetch_config("forecast_reserve_battery_percent")
 
         if low_battery is not None:
             try:
@@ -599,6 +620,36 @@ class PowerMonitorState:
                 pass
         if ntfy_topic is not None:
             self.settings.ntfy_topic_url = ntfy_topic
+        if forecast_latitude is not None:
+            try:
+                self.settings.forecast_latitude = float(forecast_latitude)
+            except ValueError:
+                pass
+        if forecast_longitude is not None:
+            try:
+                self.settings.forecast_longitude = float(forecast_longitude)
+            except ValueError:
+                pass
+        if forecast_check_hours is not None:
+            try:
+                self.settings.forecast_check_hours = int(forecast_check_hours)
+            except ValueError:
+                pass
+        if forecast_cloud_threshold_percent is not None:
+            try:
+                self.settings.forecast_cloud_threshold_percent = int(forecast_cloud_threshold_percent)
+            except ValueError:
+                pass
+        if forecast_evening_advisory_hour is not None:
+            try:
+                self.settings.forecast_evening_advisory_hour = int(forecast_evening_advisory_hour)
+            except ValueError:
+                pass
+        if forecast_reserve_battery_percent is not None:
+            try:
+                self.settings.forecast_reserve_battery_percent = int(forecast_reserve_battery_percent)
+            except ValueError:
+                pass
 
     def get_live_payload(self) -> dict[str, Any]:
         with self.lock:
@@ -623,6 +674,12 @@ class PowerMonitorState:
                 "alert_cooldown_minutes": self.settings.alert_cooldown_minutes,
                 "ntfy_topic_url": self.settings.ntfy_topic_url,
                 "ntfy_enabled": bool(self.settings.ntfy_topic_url),
+                "forecast_latitude": self.settings.forecast_latitude,
+                "forecast_longitude": self.settings.forecast_longitude,
+                "forecast_check_hours": self.settings.forecast_check_hours,
+                "forecast_cloud_threshold_percent": self.settings.forecast_cloud_threshold_percent,
+                "forecast_evening_advisory_hour": self.settings.forecast_evening_advisory_hour,
+                "forecast_reserve_battery_percent": self.settings.forecast_reserve_battery_percent,
             },
         }
 
@@ -654,7 +711,63 @@ class PowerMonitorState:
                 self.settings.ntfy_topic_url = value
                 self.database.upsert_config("ntfy_topic_url", value)
 
+            if "forecast_latitude" in updates:
+                raw = updates["forecast_latitude"]
+                if raw in ("", None):
+                    self.settings.forecast_latitude = None
+                    self.database.upsert_config("forecast_latitude", "")
+                else:
+                    value = float(raw)
+                    if not -90 <= value <= 90:
+                        raise ValueError("forecast_latitude must be between -90 and 90")
+                    self.settings.forecast_latitude = value
+                    self.database.upsert_config("forecast_latitude", str(value))
+
+            if "forecast_longitude" in updates:
+                raw = updates["forecast_longitude"]
+                if raw in ("", None):
+                    self.settings.forecast_longitude = None
+                    self.database.upsert_config("forecast_longitude", "")
+                else:
+                    value = float(raw)
+                    if not -180 <= value <= 180:
+                        raise ValueError("forecast_longitude must be between -180 and 180")
+                    self.settings.forecast_longitude = value
+                    self.database.upsert_config("forecast_longitude", str(value))
+
+            if "forecast_check_hours" in updates:
+                value = int(updates["forecast_check_hours"])
+                if not 1 <= value <= 24:
+                    raise ValueError("forecast_check_hours must be between 1 and 24")
+                self.settings.forecast_check_hours = value
+                self.database.upsert_config("forecast_check_hours", str(value))
+
+            if "forecast_cloud_threshold_percent" in updates:
+                value = int(updates["forecast_cloud_threshold_percent"])
+                if not 1 <= value <= 100:
+                    raise ValueError("forecast_cloud_threshold_percent must be between 1 and 100")
+                self.settings.forecast_cloud_threshold_percent = value
+                self.database.upsert_config("forecast_cloud_threshold_percent", str(value))
+
+            if "forecast_evening_advisory_hour" in updates:
+                value = int(updates["forecast_evening_advisory_hour"])
+                if not 0 <= value <= 23:
+                    raise ValueError("forecast_evening_advisory_hour must be between 0 and 23")
+                self.settings.forecast_evening_advisory_hour = value
+                self.database.upsert_config("forecast_evening_advisory_hour", str(value))
+
+            if "forecast_reserve_battery_percent" in updates:
+                value = int(updates["forecast_reserve_battery_percent"])
+                if not 1 <= value <= 100:
+                    raise ValueError("forecast_reserve_battery_percent must be between 1 and 100")
+                self.settings.forecast_reserve_battery_percent = value
+                self.database.upsert_config("forecast_reserve_battery_percent", str(value))
+
         return self.get_alerts_payload()["settings"]
+
+    def send_test_notification(self) -> dict[str, Any]:
+        delivered = self.alert_manager.send_test_notification(utc_now())
+        return {"delivered": delivered}
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -701,6 +814,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
             self._send_json({"ok": True, "settings": settings})
+            return
+        if parsed.path == "/api/alerts/test":
+            result = self.app_state.send_test_notification()
+            self._send_json({"ok": True, **result})
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 

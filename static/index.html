@@ -106,8 +106,33 @@
               <span>Ntfy Topic URL (optional)</span>
               <input type="url" id="setting-ntfy-url" placeholder="https://ntfy.sh/your-topic" />
             </label>
+            <label class="form-field">
+              <span>Forecast Latitude</span>
+              <input type="number" id="setting-forecast-latitude" step="0.0001" min="-90" max="90" placeholder="35.3733" />
+            </label>
+            <label class="form-field">
+              <span>Forecast Longitude</span>
+              <input type="number" id="setting-forecast-longitude" step="0.0001" min="-180" max="180" placeholder="-119.0187" />
+            </label>
+            <label class="form-field">
+              <span>Forecast Check Every (hours)</span>
+              <input type="number" id="setting-forecast-check-hours" min="1" max="24" required />
+            </label>
+            <label class="form-field">
+              <span>Cloud Threshold (%)</span>
+              <input type="number" id="setting-forecast-cloud-threshold" min="1" max="100" required />
+            </label>
+            <label class="form-field">
+              <span>Advisory Hour (0-23)</span>
+              <input type="number" id="setting-forecast-evening-hour" min="0" max="23" required />
+            </label>
+            <label class="form-field">
+              <span>Reserve Battery Target (%)</span>
+              <input type="number" id="setting-forecast-reserve-battery" min="1" max="100" required />
+            </label>
             <div class="form-actions">
               <button type="submit" class="zoom-button">Save Alert Settings</button>
+              <button type="button" class="zoom-button" id="send-test-notification">Send Test Notification</button>
               <div class="form-status" id="alert-settings-status"></div>
             </div>
           </form>

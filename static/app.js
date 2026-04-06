@@ -17,6 +17,13 @@ const settingLowBattery = document.getElementById("setting-low-battery");
 const settingHighLoad = document.getElementById("setting-high-load");
 const settingCooldown = document.getElementById("setting-cooldown");
 const settingNtfyUrl = document.getElementById("setting-ntfy-url");
+const settingForecastLatitude = document.getElementById("setting-forecast-latitude");
+const settingForecastLongitude = document.getElementById("setting-forecast-longitude");
+const settingForecastCheckHours = document.getElementById("setting-forecast-check-hours");
+const settingForecastCloudThreshold = document.getElementById("setting-forecast-cloud-threshold");
+const settingForecastEveningHour = document.getElementById("setting-forecast-evening-hour");
+const settingForecastReserveBattery = document.getElementById("setting-forecast-reserve-battery");
+const sendTestNotificationButton = document.getElementById("send-test-notification");
 
 const chart = document.getElementById("history-chart");
 const chartTooltip = document.getElementById("chart-tooltip");
@@ -202,6 +209,12 @@ function renderAlertSettings() {
   settingHighLoad.value = settings.high_load_watts ?? "";
   settingCooldown.value = settings.alert_cooldown_minutes ?? "";
   settingNtfyUrl.value = settings.ntfy_topic_url || "";
+  settingForecastLatitude.value = settings.forecast_latitude ?? "";
+  settingForecastLongitude.value = settings.forecast_longitude ?? "";
+  settingForecastCheckHours.value = settings.forecast_check_hours ?? "";
+  settingForecastCloudThreshold.value = settings.forecast_cloud_threshold_percent ?? "";
+  settingForecastEveningHour.value = settings.forecast_evening_advisory_hour ?? "";
+  settingForecastReserveBattery.value = settings.forecast_reserve_battery_percent ?? "";
   if (!alertSettingsStatus.classList.contains("error")) {
     alertSettingsStatus.textContent = settings.ntfy_enabled
       ? "Push notifications are enabled for this topic."
@@ -693,10 +706,35 @@ function bindControls() {
         high_load_watts: Number(settingHighLoad.value),
         alert_cooldown_minutes: Number(settingCooldown.value),
         ntfy_topic_url: settingNtfyUrl.value.trim(),
+        forecast_latitude: settingForecastLatitude.value.trim(),
+        forecast_longitude: settingForecastLongitude.value.trim(),
+        forecast_check_hours: Number(settingForecastCheckHours.value),
+        forecast_cloud_threshold_percent: Number(settingForecastCloudThreshold.value),
+        forecast_evening_advisory_hour: Number(settingForecastEveningHour.value),
+        forecast_reserve_battery_percent: Number(settingForecastReserveBattery.value),
       });
       await refreshAlerts();
       alertSettingsStatus.textContent = "Saved. New alert rules are active now.";
       alertSettingsStatus.classList.add("ok");
+    } catch (error) {
+      alertSettingsStatus.textContent = error.message;
+      alertSettingsStatus.classList.add("error");
+    }
+  });
+
+  sendTestNotificationButton.addEventListener("click", async () => {
+    alertSettingsStatus.classList.remove("ok", "error");
+    alertSettingsStatus.textContent = "Sending test notification...";
+    try {
+      const result = await postJson("/api/alerts/test", {});
+      await refreshAlerts();
+      if (result.delivered) {
+        alertSettingsStatus.textContent = "Test notification sent successfully.";
+        alertSettingsStatus.classList.add("ok");
+      } else {
+        alertSettingsStatus.textContent = "Test alert was created, but push delivery is disabled or failed.";
+        alertSettingsStatus.classList.add("error");
+      }
     } catch (error) {
       alertSettingsStatus.textContent = error.message;
       alertSettingsStatus.classList.add("error");

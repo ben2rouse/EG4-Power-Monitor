@@ -71,6 +71,7 @@ POWER_MONITOR_FORECAST_RESERVE_BATTERY_PERCENT=70
 ```
 
 If you set `POWER_MONITOR_NTFY_TOPIC_URL` to an `ntfy` topic URL, the built-in alerts will also try to send push notifications there.
+You can also edit alert thresholds, weather advisory settings, and send a test notification directly from the `Alerts` page in the web UI.
 
 ## Forecast advisory alert (cloudy tomorrow)
 
