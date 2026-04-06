@@ -363,7 +363,7 @@ function buildDeficitOverlay(points, width, height, pad, gapThresholdMs) {
     if (!(current.output_active_power_w > current.pv_input_power_w || next.output_active_power_w > next.pv_input_power_w)) continue;
     const x1 = pad + ((currentTs - minTs) / rangeTs) * (width - pad * 2);
     const x2 = pad + ((nextTs - minTs) / rangeTs) * (width - pad * 2);
-    overlays.push(`<rect x="${x1.toFixed(1)}" y="${pad}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="${height - pad * 2}" fill="rgba(216,96,43,0.10)"></rect>`);
+    overlays.push(`<rect x="${x1.toFixed(1)}" y="${pad}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="${height - pad * 2}" fill="rgba(240,116,48,0.15)"></rect>`);
   }
 
   return overlays.join("");
@@ -534,24 +534,24 @@ function renderChart() {
   const deficitOverlay = buildDeficitOverlay(viewportPoints, width, height, pad, gapThresholdMs);
   const horizontalGuides = [0.2, 0.4, 0.6, 0.8].map((fraction) => {
     const y = pad + (height - pad * 2) * fraction;
-    return `<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" stroke="rgba(31,35,33,0.10)" stroke-width="1" />`;
+    return `<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" stroke="rgba(255,255,255,0.1)" stroke-width="1" />`;
   }).join("");
 
   const axisValues = [0, 0.25, 0.5, 0.75, 1];
   const leftAxisLabels = powerSeries.length ? axisValues.map((fraction) => {
     const y = height - pad - fraction * (height - pad * 2);
     const watts = Math.round(powerMin + fraction * (powerMax - powerMin));
-    return `<text x="${pad - 14}" y="${y + 6}" text-anchor="end" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${watts}W</text>`;
+    return `<text x="${pad - 14}" y="${y + 6}" text-anchor="end" font-size="16" font-weight="700" fill="rgba(154,160,166,0.95)">${watts}W</text>`;
   }).join("") : "";
   const rightAxisLabels = percentSeries.length ? axisValues.map((fraction) => {
     const y = height - pad - fraction * (height - pad * 2);
     const percent = Math.round(percentMin + fraction * (percentMax - percentMin));
-    return `<text x="${width - pad + 14}" y="${y + 6}" font-size="16" font-weight="700" fill="rgba(88,98,100,0.95)">${percent}%</text>`;
+    return `<text x="${width - pad + 14}" y="${y + 6}" font-size="16" font-weight="700" fill="rgba(154,160,166,0.95)">${percent}%</text>`;
   }).join("") : "";
   const voltageAxisLabels = voltageSeries.length ? axisValues.map((fraction) => {
     const y = height - pad - fraction * (height - pad * 2);
     const volts = (voltageMin + fraction * (voltageMax - voltageMin)).toFixed(1);
-    return `<text x="${pad + 18}" y="${y + 6}" font-size="15" font-weight="700" fill="rgba(21,122,110,0.95)">${volts}V</text>`;
+    return `<text x="${pad + 18}" y="${y + 6}" font-size="15" font-weight="700" fill="rgba(42,158,140,0.95)">${volts}V</text>`;
   }).join("") : "";
 
   const polylines = activeSeries.map((series) => {
@@ -570,7 +570,7 @@ function renderChart() {
     ${rightAxisLabels}
     ${voltageAxisLabels}
     ${polylines}
-    <line id="chart-cursor-line" x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="rgba(31,35,33,0.20)" stroke-width="2" opacity="0"></line>
+    <line id="chart-cursor-line" x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="rgba(255,255,255,0.3)" stroke-width="2" opacity="0"></line>
     ${circles}
   `;
 
