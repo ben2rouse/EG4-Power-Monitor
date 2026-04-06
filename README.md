@@ -62,9 +62,32 @@ POWER_MONITOR_LOW_BATTERY_PERCENT=25
 POWER_MONITOR_HIGH_LOAD_WATTS=4000
 POWER_MONITOR_ALERT_COOLDOWN_MINUTES=20
 POWER_MONITOR_NTFY_TOPIC_URL=
+POWER_MONITOR_FORECAST_LATITUDE=
+POWER_MONITOR_FORECAST_LONGITUDE=
+POWER_MONITOR_FORECAST_CHECK_HOURS=6
+POWER_MONITOR_FORECAST_CLOUD_THRESHOLD_PERCENT=70
+POWER_MONITOR_FORECAST_ADVISORY_HOUR=17
+POWER_MONITOR_FORECAST_RESERVE_BATTERY_PERCENT=70
 ```
 
 If you set `POWER_MONITOR_NTFY_TOPIC_URL` to an `ntfy` topic URL, the built-in alerts will also try to send push notifications there.
+
+## Forecast advisory alert (cloudy tomorrow)
+
+If you set `POWER_MONITOR_FORECAST_LATITUDE` and `POWER_MONITOR_FORECAST_LONGITUDE`, the monitor will check Open-Meteo forecast data and create an alert in the evening when tomorrow is forecast cloudy and battery reserve is below your target.
+
+Example:
+
+```bash
+export POWER_MONITOR_NTFY_TOPIC_URL="https://ntfy.sh/your-unique-topic"
+export POWER_MONITOR_FORECAST_LATITUDE="35.3733"
+export POWER_MONITOR_FORECAST_LONGITUDE="-119.0187"
+export POWER_MONITOR_FORECAST_CLOUD_THRESHOLD_PERCENT="70"
+export POWER_MONITOR_FORECAST_ADVISORY_HOUR="17"
+export POWER_MONITOR_FORECAST_RESERVE_BATTERY_PERCENT="70"
+```
+
+Then restart the service so new settings apply.
 
 ## Run at boot with systemd
 

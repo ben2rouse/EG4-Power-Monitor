@@ -30,6 +30,13 @@ STATIC_DIR = BASE_DIR / "static"
 DB_PATH = BASE_DIR / "data" / "power_monitor.sqlite3"
 
 
+def optional_float_env(name: str) -> float | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    return float(raw)
+
+
 @dataclass
 class Settings:
     serial_port: str = os.getenv("POWER_MONITOR_SERIAL_PORT", "/dev/ttyUSB0")
@@ -43,6 +50,12 @@ class Settings:
     high_load_watts: int = int(os.getenv("POWER_MONITOR_HIGH_LOAD_WATTS", "4000"))
     alert_cooldown_minutes: int = int(os.getenv("POWER_MONITOR_ALERT_COOLDOWN_MINUTES", "20"))
     ntfy_topic_url: str = os.getenv("POWER_MONITOR_NTFY_TOPIC_URL", "").strip()
+    forecast_latitude: float | None = optional_float_env("POWER_MONITOR_FORECAST_LATITUDE")
+    forecast_longitude: float | None = optional_float_env("POWER_MONITOR_FORECAST_LONGITUDE")
+    forecast_check_hours: int = int(os.getenv("POWER_MONITOR_FORECAST_CHECK_HOURS", "6"))
+    forecast_cloud_threshold_percent: int = int(os.getenv("POWER_MONITOR_FORECAST_CLOUD_THRESHOLD_PERCENT", "70"))
+    forecast_evening_advisory_hour: int = int(os.getenv("POWER_MONITOR_FORECAST_ADVISORY_HOUR", "17"))
+    forecast_reserve_battery_percent: int = int(os.getenv("POWER_MONITOR_FORECAST_RESERVE_BATTERY_PERCENT", "70"))
 
 
 def utc_now() -> datetime:
@@ -339,6 +352,8 @@ class AlertManager:
         self.settings = settings
         self.database = database
         self._last_sent: dict[str, datetime] = {}
+        self._next_forecast_check_at: datetime | None = None
+        self._forecast_alerted_for_date: str | None = None
         self._lock = threading.Lock()
 
     def evaluate_sample(self, ts_utc: datetime, sample: dict[str, Any]) -> None:
@@ -398,6 +413,92 @@ class AlertManager:
             error_message,
             None,
         )
+
+    def evaluate_forecast_advisory(self, ts_utc: datetime, sample: dict[str, Any]) -> None:
+        if self.settings.forecast_latitude is None or self.settings.forecast_longitude is None:
+            return
+        if self._next_forecast_check_at is not None and ts_utc < self._next_forecast_check_at:
+            return
+
+        self._next_forecast_check_at = ts_utc + timedelta(hours=max(1, self.settings.forecast_check_hours))
+
+        local_now = ts_utc.astimezone()
+        if local_now.hour < self.settings.forecast_evening_advisory_hour:
+            return
+
+        forecast = self._fetch_tomorrow_daylight_cloud(local_now)
+        if forecast is None:
+            return
+        tomorrow_key, avg_cloud_percent = forecast
+        if avg_cloud_percent < self.settings.forecast_cloud_threshold_percent:
+            return
+        if self._forecast_alerted_for_date == tomorrow_key:
+            return
+
+        battery_capacity = sample.get("battery_capacity_percent")
+        if battery_capacity is not None and battery_capacity >= self.settings.forecast_reserve_battery_percent:
+            return
+
+        battery_text = (
+            f"Battery is at {battery_capacity}%."
+            if battery_capacity is not None
+            else "Battery percentage is unavailable."
+        )
+        self._emit(
+            ts_utc,
+            "info",
+            "forecast_reserve_battery",
+            "Cloudy forecast tomorrow: reserve battery tonight",
+            (
+                f"Tomorrow daylight cloud cover is forecast around {int(round(avg_cloud_percent))}%. "
+                f"{battery_text} Consider reducing evening loads to preserve reserve."
+            ),
+            sample,
+        )
+        self._forecast_alerted_for_date = tomorrow_key
+
+    def _fetch_tomorrow_daylight_cloud(self, local_now: datetime) -> tuple[str, float] | None:
+        latitude = self.settings.forecast_latitude
+        longitude = self.settings.forecast_longitude
+        if latitude is None or longitude is None:
+            return None
+
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={latitude}"
+            f"&longitude={longitude}"
+            "&hourly=cloud_cover,is_day"
+            "&timezone=auto"
+            "&forecast_days=3"
+        )
+        request = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            return None
+
+        hourly = payload.get("hourly", {})
+        times = hourly.get("time") or []
+        clouds = hourly.get("cloud_cover") or []
+        is_day = hourly.get("is_day") or []
+        if not times or len(times) != len(clouds) or len(times) != len(is_day):
+            return None
+
+        tomorrow = (local_now.date() + timedelta(days=1)).isoformat()
+        daylight_clouds = []
+        for index, ts in enumerate(times):
+            if not isinstance(ts, str):
+                continue
+            if not ts.startswith(tomorrow):
+                continue
+            if int(is_day[index]) != 1:
+                continue
+            daylight_clouds.append(float(clouds[index]))
+
+        if not daylight_clouds:
+            return None
+        return tomorrow, sum(daylight_clouds) / len(daylight_clouds)
 
     def _emit(
         self,
@@ -463,6 +564,7 @@ class PowerMonitorState:
                 sample = self.client.poll()
                 self.database.insert_sample(timestamp, sample)
                 self.alert_manager.evaluate_sample(timestamp, sample)
+                self.alert_manager.evaluate_forecast_advisory(timestamp, sample)
                 self.database.prune()
                 with self.lock:
                     self.latest = {"ts_utc": isoformat(timestamp), **sample}
