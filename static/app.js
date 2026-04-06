@@ -2,6 +2,7 @@ const metricCards = document.getElementById("metric-cards");
 const connectionStatus = document.getElementById("connection-status");
 const lastUpdated = document.getElementById("last-updated");
 const connectionDetails = document.getElementById("connection-details");
+const overviewGrid = document.getElementById("overview-grid");
 const chart = document.getElementById("history-chart");
 const chartTooltip = document.getElementById("chart-tooltip");
 const seriesPicker = document.getElementById("series-picker");
@@ -32,6 +33,7 @@ const chartSeries = [
 
 const visibleSeries = new Set(chartSeries.filter((series) => series.checked).map((series) => series.key));
 let currentHistoryPoints = [];
+let currentLiveSample = {};
 const zoomSteps = [1, 3, 6, 12, 24, 72, 168];
 let viewportHours = 24;
 let viewportEndFraction = 1;
@@ -95,6 +97,114 @@ function renderConnection(payload) {
   connectionDetails.innerHTML = details
     .map(([k, v]) => `<div>${k}</div><div>${v}</div>`)
     .join("");
+}
+
+function buildOverview(sample, historyPoints) {
+  const enriched = enrichSample(sample);
+  const recentPoints = historyPoints.slice(-288);
+  const validLoadPoints = recentPoints.filter((point) => point.output_active_power_w !== null && point.output_active_power_w !== undefined);
+  const validSolarPoints = recentPoints.filter((point) => point.pv_input_power_w !== null && point.pv_input_power_w !== undefined);
+  const validCapacityPoints = recentPoints.filter((point) => point.battery_capacity_percent !== null && point.battery_capacity_percent !== undefined);
+  const deficitPoints = recentPoints.filter((point) =>
+    point.output_active_power_w !== null &&
+    point.pv_input_power_w !== null &&
+    point.output_active_power_w > point.pv_input_power_w
+  );
+
+  const batteryContribution = enriched.output_active_power_w > 0 && enriched.net_load_after_solar_w !== null
+    ? Math.min(100, Math.max(0, (Math.max(0, enriched.net_load_after_solar_w) / enriched.output_active_power_w) * 100))
+    : null;
+  const batteryPowerEstimate = enriched.battery_voltage_v && enriched.battery_discharge_current_a
+    ? enriched.battery_voltage_v * enriched.battery_discharge_current_a
+    : null;
+  const batteryStatus = batteryPowerEstimate !== null && batteryPowerEstimate > 80
+    ? "Discharging"
+    : enriched.battery_charging_current_a && enriched.battery_charging_current_a > 1
+      ? "Charging"
+      : "Stable";
+  const peakLoad = validLoadPoints.length
+    ? Math.max(...validLoadPoints.map((point) => point.output_active_power_w))
+    : null;
+  const peakSolar = validSolarPoints.length
+    ? Math.max(...validSolarPoints.map((point) => point.pv_input_power_w))
+    : null;
+  const averageSolarCoverage = validLoadPoints.length
+    ? recentPoints.reduce((sum, point) => {
+      if (!point.output_active_power_w || point.pv_input_power_w === null || point.pv_input_power_w === undefined) {
+        return sum;
+      }
+      return sum + Math.min(100, (point.pv_input_power_w / point.output_active_power_w) * 100);
+    }, 0) / validLoadPoints.length
+    : null;
+  const solarDeficitTime = recentPoints.length
+    ? (deficitPoints.length / recentPoints.length) * 100
+    : null;
+  const batteryTrend = validCapacityPoints.length > 4
+    ? validCapacityPoints[validCapacityPoints.length - 1].battery_capacity_percent - validCapacityPoints[0].battery_capacity_percent
+    : null;
+  const batteryTrendText = batteryTrend === null
+    ? "Not enough history yet"
+    : batteryTrend > 1
+      ? "Battery reserve has climbed in this window"
+      : batteryTrend < -1
+        ? "Battery reserve has fallen in this window"
+        : "Battery reserve has stayed mostly flat";
+
+  return [
+    {
+      label: "Solar Coverage Now",
+      value: formatNumber(enriched.solar_coverage_percent, "%"),
+      sub: "Current load covered directly by solar",
+    },
+    {
+      label: "Battery Contribution Now",
+      value: formatNumber(batteryContribution, "%"),
+      sub: "Share of the present load likely supplied by battery",
+    },
+    {
+      label: "Battery Status",
+      value: batteryStatus,
+      sub: batteryPowerEstimate !== null
+        ? `Estimated battery output ${formatNumber(batteryPowerEstimate, "W")}`
+        : "Waiting for enough battery data",
+    },
+    {
+      label: "Peak Load",
+      value: formatNumber(peakLoad, "W"),
+      sub: "Highest load in the recent history window",
+    },
+    {
+      label: "Peak Solar",
+      value: formatNumber(peakSolar, "W"),
+      sub: "Highest solar input in the recent history window",
+    },
+    {
+      label: "Solar Deficit Time",
+      value: formatNumber(solarDeficitTime, "%"),
+      sub: "How often load has been above solar recently",
+    },
+    {
+      label: "Average Solar Coverage",
+      value: formatNumber(averageSolarCoverage, "%"),
+      sub: "Average load coverage across recent samples",
+    },
+    {
+      label: "Battery Trend",
+      value: batteryTrend === null ? "--" : `${batteryTrend > 0 ? "+" : ""}${batteryTrend.toFixed(1)}%`,
+      sub: batteryTrendText,
+    },
+  ];
+}
+
+function renderOverview(sample, historyPoints) {
+  const overviewCards = buildOverview(sample, historyPoints);
+  overviewGrid.innerHTML = overviewCards.map((card) => `
+    <article class="overview-card">
+      <div class="label">${card.label}</div>
+      <div class="value">${card.value}</div>
+      <div class="sub">${card.sub}</div>
+    </article>
+  `).join("");
 }
 
 function formatViewportLabel(hours) {
@@ -459,13 +569,18 @@ async function fetchJson(url) {
 
 async function refreshLive() {
   const payload = await fetchJson("/api/live");
+  currentLiveSample = payload.sample || {};
   renderCards(payload.sample || {});
   renderConnection(payload);
+  renderOverview(currentLiveSample, currentHistoryPoints);
+  return payload;
 }
 
 async function refreshHistory() {
   const payload = await fetchJson("/api/history?hours=168");
   renderChart(payload.points || []);
+  renderOverview(currentLiveSample, payload.points || []);
+  return payload;
 }
 
 function stepZoom(direction) {
@@ -509,7 +624,8 @@ function bindChartTouches() {
 
 async function tick() {
   try {
-    await Promise.all([refreshLive(), refreshHistory()]);
+    const [livePayload, historyPayload] = await Promise.all([refreshLive(), refreshHistory()]);
+    renderOverview(livePayload.sample || {}, historyPayload.points || []);
   } catch (error) {
     connectionStatus.textContent = "Dashboard offline";
     connectionStatus.className = "status-pill warn";
