@@ -89,7 +89,28 @@
               <h2>Notifications and recent events</h2>
             </div>
           </div>
-          <section class="overview-grid" id="alert-settings-grid"></section>
+          <form class="alert-settings-form" id="alert-settings-form">
+            <label class="form-field">
+              <span>Low Battery Threshold (%)</span>
+              <input type="number" id="setting-low-battery" min="1" max="100" required />
+            </label>
+            <label class="form-field">
+              <span>High Load Threshold (W)</span>
+              <input type="number" id="setting-high-load" min="100" step="50" required />
+            </label>
+            <label class="form-field">
+              <span>Alert Cooldown (minutes)</span>
+              <input type="number" id="setting-cooldown" min="1" max="1440" required />
+            </label>
+            <label class="form-field form-field-wide">
+              <span>Ntfy Topic URL (optional)</span>
+              <input type="url" id="setting-ntfy-url" placeholder="https://ntfy.sh/your-topic" />
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="zoom-button">Save Alert Settings</button>
+              <div class="form-status" id="alert-settings-status"></div>
+            </div>
+          </form>
         </section>
 
         <section class="panel">

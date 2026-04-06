@@ -228,6 +228,14 @@ class Database:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alerts_ts_utc ON alerts(ts_utc DESC)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
 
     def insert_sample(self, ts_utc: datetime, sample: dict[str, Any]) -> None:
         record = {"ts_utc": isoformat(ts_utc), **sample}
@@ -305,6 +313,25 @@ class Database:
             item["delivered"] = bool(item["delivered"])
             alerts.append(item)
         return alerts
+
+    def fetch_config(self, key: str) -> str | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM app_config WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return None if row is None else str(row["value"])
+
+    def upsert_config(self, key: str, value: str) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_config (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (key, value),
+            )
 
 
 class AlertManager:
@@ -409,6 +436,7 @@ class PowerMonitorState:
     def __init__(self, settings: Settings, database: Database) -> None:
         self.settings = settings
         self.database = database
+        self._load_persisted_alert_settings()
         self.client = InverterClient(settings)
         self.alert_manager = AlertManager(settings, database)
         self.lock = threading.Lock()
@@ -446,6 +474,30 @@ class PowerMonitorState:
                     self.last_error = str(exc)
             self._stop_event.wait(self.settings.poll_seconds)
 
+    def _load_persisted_alert_settings(self) -> None:
+        low_battery = self.database.fetch_config("low_battery_percent")
+        high_load = self.database.fetch_config("high_load_watts")
+        cooldown = self.database.fetch_config("alert_cooldown_minutes")
+        ntfy_topic = self.database.fetch_config("ntfy_topic_url")
+
+        if low_battery is not None:
+            try:
+                self.settings.low_battery_percent = int(low_battery)
+            except ValueError:
+                pass
+        if high_load is not None:
+            try:
+                self.settings.high_load_watts = int(high_load)
+            except ValueError:
+                pass
+        if cooldown is not None:
+            try:
+                self.settings.alert_cooldown_minutes = int(cooldown)
+            except ValueError:
+                pass
+        if ntfy_topic is not None:
+            self.settings.ntfy_topic_url = ntfy_topic
+
     def get_live_payload(self) -> dict[str, Any]:
         with self.lock:
             return {
@@ -467,9 +519,40 @@ class PowerMonitorState:
                 "low_battery_percent": self.settings.low_battery_percent,
                 "high_load_watts": self.settings.high_load_watts,
                 "alert_cooldown_minutes": self.settings.alert_cooldown_minutes,
+                "ntfy_topic_url": self.settings.ntfy_topic_url,
                 "ntfy_enabled": bool(self.settings.ntfy_topic_url),
             },
         }
+
+    def update_alert_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            if "low_battery_percent" in updates:
+                value = int(updates["low_battery_percent"])
+                if not 1 <= value <= 100:
+                    raise ValueError("low_battery_percent must be between 1 and 100")
+                self.settings.low_battery_percent = value
+                self.database.upsert_config("low_battery_percent", str(value))
+
+            if "high_load_watts" in updates:
+                value = int(updates["high_load_watts"])
+                if value < 100:
+                    raise ValueError("high_load_watts must be at least 100")
+                self.settings.high_load_watts = value
+                self.database.upsert_config("high_load_watts", str(value))
+
+            if "alert_cooldown_minutes" in updates:
+                value = int(updates["alert_cooldown_minutes"])
+                if not 1 <= value <= 1440:
+                    raise ValueError("alert_cooldown_minutes must be between 1 and 1440")
+                self.settings.alert_cooldown_minutes = value
+                self.database.upsert_config("alert_cooldown_minutes", str(value))
+
+            if "ntfy_topic_url" in updates:
+                value = str(updates["ntfy_topic_url"]).strip()
+                self.settings.ntfy_topic_url = value
+                self.database.upsert_config("ntfy_topic_url", value)
+
+        return self.get_alerts_payload()["settings"]
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -502,6 +585,23 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         self._serve_static(parsed.path)
 
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/alerts/settings":
+            try:
+                payload = self._read_json_body()
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                settings = self.app_state.update_alert_settings(payload)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"ok": True, "settings": settings})
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
     def log_message(self, format: str, *args: Any) -> None:
         return
 
@@ -532,9 +632,23 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def _send_json(self, payload: dict[str, Any]) -> None:
+    def _read_json_body(self) -> dict[str, Any]:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = 0
+        raw = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid JSON payload") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("JSON payload must be an object")
+        return parsed
+
+    def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         raw = json.dumps(payload).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(raw)))

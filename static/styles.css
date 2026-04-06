@@ -377,6 +377,56 @@ h2 {
   color: var(--muted);
 }
 
+.alert-settings-form {
+  margin-top: 18px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.form-field {
+  display: grid;
+  gap: 8px;
+}
+
+.form-field span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.form-field input {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 12px;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.form-field-wide {
+  grid-column: 1 / -1;
+}
+
+.form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.form-status {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.form-status.ok {
+  color: var(--ok);
+}
+
+.form-status.error {
+  color: var(--critical);
+}
+
 .alerts-list {
   margin-top: 18px;
   display: grid;

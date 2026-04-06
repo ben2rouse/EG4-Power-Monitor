@@ -10,8 +10,13 @@ const connectionStatus = document.getElementById("connection-status");
 const lastUpdated = document.getElementById("last-updated");
 const connectionDetails = document.getElementById("connection-details");
 const overviewGrid = document.getElementById("overview-grid");
-const alertSettingsGrid = document.getElementById("alert-settings-grid");
 const alertsList = document.getElementById("alerts-list");
+const alertSettingsForm = document.getElementById("alert-settings-form");
+const alertSettingsStatus = document.getElementById("alert-settings-status");
+const settingLowBattery = document.getElementById("setting-low-battery");
+const settingHighLoad = document.getElementById("setting-high-load");
+const settingCooldown = document.getElementById("setting-cooldown");
+const settingNtfyUrl = document.getElementById("setting-ntfy-url");
 
 const chart = document.getElementById("history-chart");
 const chartTooltip = document.getElementById("chart-tooltip");
@@ -193,19 +198,16 @@ function renderOverview() {
 
 function renderAlertSettings() {
   const settings = state.alertsPayload?.settings || {};
-  const cards = [
-    ["Low Battery Threshold", formatNumber(settings.low_battery_percent, "%"), "Creates a warning when battery capacity drops under this level."],
-    ["High Load Threshold", formatNumber(settings.high_load_watts, "W"), "Creates a warning when load crosses this wattage."],
-    ["Alert Cooldown", settings.alert_cooldown_minutes ? `${settings.alert_cooldown_minutes} min` : "--", "Prevents duplicate notifications from firing too often."],
-    ["Push Delivery", settings.ntfy_enabled ? "Enabled" : "Not configured", "Set POWER_MONITOR_NTFY_TOPIC_URL on the Pi to receive push notifications."],
-  ];
-  alertSettingsGrid.innerHTML = cards.map(([label, value, sub]) => `
-    <article class="overview-card">
-      <div class="label">${label}</div>
-      <div class="value">${value}</div>
-      <div class="sub">${sub}</div>
-    </article>
-  `).join("");
+  settingLowBattery.value = settings.low_battery_percent ?? "";
+  settingHighLoad.value = settings.high_load_watts ?? "";
+  settingCooldown.value = settings.alert_cooldown_minutes ?? "";
+  settingNtfyUrl.value = settings.ntfy_topic_url || "";
+  if (!alertSettingsStatus.classList.contains("error")) {
+    alertSettingsStatus.textContent = settings.ntfy_enabled
+      ? "Push notifications are enabled for this topic."
+      : "Push notifications are disabled. Add an ntfy topic URL to enable.";
+    alertSettingsStatus.classList.remove("ok");
+  }
 }
 
 function renderAlerts() {
@@ -572,6 +574,19 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || `Request failed: ${response.status}`);
+  }
+  return data;
+}
+
 async function refreshLive() {
   const payload = await fetchJson("/api/live");
   state.livePayload = payload;
@@ -666,6 +681,26 @@ function bindControls() {
   deficitToggle.addEventListener("change", () => {
     state.showSolarDeficit = deficitToggle.checked;
     renderChart();
+  });
+
+  alertSettingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    alertSettingsStatus.classList.remove("ok", "error");
+    alertSettingsStatus.textContent = "Saving...";
+    try {
+      await postJson("/api/alerts/settings", {
+        low_battery_percent: Number(settingLowBattery.value),
+        high_load_watts: Number(settingHighLoad.value),
+        alert_cooldown_minutes: Number(settingCooldown.value),
+        ntfy_topic_url: settingNtfyUrl.value.trim(),
+      });
+      await refreshAlerts();
+      alertSettingsStatus.textContent = "Saved. New alert rules are active now.";
+      alertSettingsStatus.classList.add("ok");
+    } catch (error) {
+      alertSettingsStatus.textContent = error.message;
+      alertSettingsStatus.classList.add("error");
+    }
   });
 }
 
