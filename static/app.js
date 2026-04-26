@@ -23,6 +23,11 @@ const settingForecastCheckHours = document.getElementById("setting-forecast-chec
 const settingForecastCloudThreshold = document.getElementById("setting-forecast-cloud-threshold");
 const settingForecastEveningHour = document.getElementById("setting-forecast-evening-hour");
 const settingForecastReserveBattery = document.getElementById("setting-forecast-reserve-battery");
+const settingBatteryCount = document.getElementById("setting-battery-count");
+const settingCapacityPerBatteryKwh = document.getElementById("setting-capacity-per-battery-kwh");
+const settingUsableCapacityPercent = document.getElementById("setting-usable-capacity-percent");
+const settingLowEstimatedBatteryPercent = document.getElementById("setting-low-estimated-battery-percent");
+const settingBatteryEstimateEnabled = document.getElementById("setting-battery-estimate-enabled");
 const sendTestNotificationButton = document.getElementById("send-test-notification");
 
 const chart = document.getElementById("history-chart");
@@ -40,6 +45,7 @@ const metrics = [
   ["Solar", "pv_input_power_w", "W"],
   ["Battery Voltage", "battery_voltage_v", "V"],
   ["Capacity", "battery_capacity_percent", "%"],
+  ["Est. Capacity", "estimated_battery_percent", "%"],
   ["Load Level", "load_percent", "%"],
   ["Solar Coverage", "solar_coverage_percent", "%"],
   ["Net Load After Solar", "net_load_after_solar_w", "W"],
@@ -184,6 +190,8 @@ function buildOverview(sample, historyPoints) {
     ["Solar Coverage Now", formatNumber(enriched.solar_coverage_percent, "%"), "Current load covered directly by solar"],
     ["Battery Contribution Now", formatNumber(batteryContribution, "%"), "Share of the present load likely supplied by battery"],
     ["Battery Status", batteryStatus, batteryPowerEstimate !== null ? `Estimated battery output ${formatNumber(batteryPowerEstimate, "W")}` : "Waiting for enough battery data"],
+    ["Inverter Battery %", formatNumber(enriched.battery_capacity_percent, "%"), "Battery percentage as reported by the inverter"],
+    ["Estimated Battery %", formatNumber(enriched.estimated_battery_percent, "%"), "Calculated from capacity settings and energy flow over time"],
     ["Peak Load", formatNumber(peakLoad, "W"), "Highest load in the recent history window"],
     ["Peak Solar", formatNumber(peakSolar, "W"), "Highest solar input in the recent history window"],
     ["Solar Deficit Time", formatNumber(solarDeficitTime, "%"), "How often load has been above solar recently"],
@@ -215,6 +223,11 @@ function renderAlertSettings() {
   settingForecastCloudThreshold.value = settings.forecast_cloud_threshold_percent ?? "";
   settingForecastEveningHour.value = settings.forecast_evening_advisory_hour ?? "";
   settingForecastReserveBattery.value = settings.forecast_reserve_battery_percent ?? "";
+  settingBatteryCount.value = settings.battery_count ?? "";
+  settingCapacityPerBatteryKwh.value = settings.capacity_per_battery_kwh ?? "";
+  settingUsableCapacityPercent.value = settings.usable_capacity_percent ?? "";
+  settingBatteryEstimateEnabled.checked = Boolean(settings.battery_estimate_enabled);
+  settingLowEstimatedBatteryPercent.value = settings.low_estimated_battery_percent ?? "";
   if (!alertSettingsStatus.classList.contains("error")) {
     alertSettingsStatus.textContent = settings.ntfy_enabled
       ? "Push notifications are enabled for this topic."
@@ -712,6 +725,11 @@ function bindControls() {
         forecast_cloud_threshold_percent: Number(settingForecastCloudThreshold.value),
         forecast_evening_advisory_hour: Number(settingForecastEveningHour.value),
         forecast_reserve_battery_percent: Number(settingForecastReserveBattery.value),
+        battery_count: Number(settingBatteryCount.value),
+        capacity_per_battery_kwh: Number(settingCapacityPerBatteryKwh.value),
+        usable_capacity_percent: Number(settingUsableCapacityPercent.value),
+        battery_estimate_enabled: settingBatteryEstimateEnabled.checked,
+        low_estimated_battery_percent: settingLowEstimatedBatteryPercent.value.trim() ? Number(settingLowEstimatedBatteryPercent.value) : null,
       });
       await refreshAlerts();
       alertSettingsStatus.textContent = "Saved. New alert rules are active now.";

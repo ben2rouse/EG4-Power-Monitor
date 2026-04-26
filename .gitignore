@@ -3,3 +3,5 @@ data/
 __pycache__/
 *.pyc
 .DS_Store
+data/power_monitor.sqlite3
+data/test*.sqlite3
