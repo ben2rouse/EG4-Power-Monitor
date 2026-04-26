@@ -130,6 +130,29 @@
               <span>Reserve Battery Target (%)</span>
               <input type="number" id="setting-forecast-reserve-battery" min="1" max="100" required />
             </label>
+            <label class="form-field form-field-wide form-field-section">
+              <span>Battery SOC Estimator</span>
+            </label>
+            <label class="form-field">
+              <span>Battery Count</span>
+              <input type="number" id="setting-battery-count" min="0" step="1" />
+            </label>
+            <label class="form-field">
+              <span>Capacity per Battery (kWh)</span>
+              <input type="number" id="setting-capacity-per-battery-kwh" min="0" step="0.01" />
+            </label>
+            <label class="form-field">
+              <span>Usable Capacity (%)</span>
+              <input type="number" id="setting-usable-capacity-percent" min="1" max="100" />
+            </label>
+            <label class="form-field">
+              <span>Low Estimated Battery (%)</span>
+              <input type="number" id="setting-low-estimated-battery-percent" min="1" max="99" placeholder="optional" />
+            </label>
+            <label class="form-field form-field-check form-field-wide">
+              <input type="checkbox" id="setting-battery-estimate-enabled" />
+              <span>Enable estimated battery percentage</span>
+            </label>
             <div class="form-actions">
               <button type="submit" class="zoom-button">Save Alert Settings</button>
               <button type="button" class="zoom-button" id="send-test-notification">Send Test Notification</button>

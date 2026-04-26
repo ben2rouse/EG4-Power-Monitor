@@ -406,6 +406,39 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.form-field-section {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  margin-top: 4px;
+  font-weight: 700;
+}
+
+.form-field-section span {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.form-field-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.form-field-check span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.form-field-check input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--battery);
+  border-radius: 4px;
+}
+
 .form-actions {
   grid-column: 1 / -1;
   display: flex;

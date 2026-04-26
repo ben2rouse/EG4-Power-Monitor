@@ -37,6 +37,13 @@ def optional_float_env(name: str) -> float | None:
     return float(raw)
 
 
+def optional_int_env(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+
 @dataclass
 class Settings:
     serial_port: str = os.getenv("POWER_MONITOR_SERIAL_PORT", "/dev/ttyUSB0")
@@ -56,6 +63,12 @@ class Settings:
     forecast_cloud_threshold_percent: int = int(os.getenv("POWER_MONITOR_FORECAST_CLOUD_THRESHOLD_PERCENT", "70"))
     forecast_evening_advisory_hour: int = int(os.getenv("POWER_MONITOR_FORECAST_ADVISORY_HOUR", "17"))
     forecast_reserve_battery_percent: int = int(os.getenv("POWER_MONITOR_FORECAST_RESERVE_BATTERY_PERCENT", "70"))
+    # Battery state-of-charge estimator settings
+    battery_count: int = int(os.getenv("POWER_MONITOR_BATTERY_COUNT", "0"))
+    capacity_per_battery_kwh: float = float(os.getenv("POWER_MONITOR_CAPACITY_PER_BATTERY_KWH", "0"))
+    usable_capacity_percent: int = int(os.getenv("POWER_MONITOR_USABLE_CAPACITY_PERCENT", "100"))
+    battery_estimate_enabled: bool = os.getenv("POWER_MONITOR_BATTERY_ESTIMATE_ENABLED", "0").lower() in {"1", "true", "yes"}
+    low_estimated_battery_percent: int | None = optional_int_env("POWER_MONITOR_LOW_ESTIMATED_BATTERY_PERCENT")
 
 
 def utc_now() -> datetime:
@@ -178,6 +191,121 @@ def parse_qpigs(raw_response: str) -> dict[str, Any]:
         )
 
     return sample
+
+
+class BatterySOCEstimator:
+    """Estimates battery state-of-charge (SOC) percentage based on energy flow.
+
+    The estimator tracks net energy (load watts minus input/solar watts) across
+    successive poll readings and adjusts a running battery percentage estimate
+    accordingly.  It resets to 100 % whenever the inverter itself reports a
+    fully-charged battery, providing a natural calibration point.
+
+    Calculation overview (per poll interval):
+        netWatts      = loadWatts - inputWatts
+        elapsedHours  = elapsedSeconds / 3600
+        netKwh        = netWatts * elapsedHours / 1000
+        estimatedPct -= (netKwh / usableCapacityKwh) * 100
+
+    Positive netWatts → load exceeds input → battery is draining.
+    Negative netWatts → input exceeds load  → battery is charging.
+    """
+
+    def __init__(self) -> None:
+        self._estimated_percent: float | None = None
+        self._last_ts: datetime | None = None
+
+    def update(
+        self,
+        ts_utc: datetime,
+        inverter_battery_percent: int | None,
+        load_watts: float | None,
+        input_watts: float | None,
+        battery_count: int,
+        capacity_per_battery_kwh: float,
+        usable_capacity_percent: int,
+    ) -> float | None:
+        """Update and return the estimated battery percentage.
+
+        Returns None when the estimate is not yet seeded (first reading or
+        no inverter reading available).  The returned value is clamped to
+        [0, 100].
+
+        Args:
+            ts_utc: UTC timestamp for the current reading.
+            inverter_battery_percent: Inverter-reported battery percentage.
+            load_watts: Current output / load power in watts.
+            input_watts: Current solar / charging input power in watts.
+            battery_count: Number of batteries in the bank (must be > 0).
+            capacity_per_battery_kwh: Nameplate capacity of each battery (kWh).
+            usable_capacity_percent: Fraction of total capacity considered
+                usable, expressed as a percentage (1–100).
+        """
+        # When the inverter reports a full charge, reset the running estimate
+        # and record this moment as the new time baseline.
+        if inverter_battery_percent == 100:
+            self._estimated_percent = 100.0
+            self._last_ts = ts_utc
+            return self._estimated_percent
+
+        # On the very first reading there is no elapsed interval to compute.
+        # Seed the estimate from the inverter reading (if available) so the
+        # display is immediately useful, then wait for the next reading.
+        if self._last_ts is None:
+            self._last_ts = ts_utc
+            if inverter_battery_percent is not None:
+                self._estimated_percent = float(inverter_battery_percent)
+            return self._estimated_percent
+
+        # If we still have no estimate (inverter reading was unavailable on
+        # the first call), try to seed from the current inverter reading.
+        if self._estimated_percent is None:
+            if inverter_battery_percent is not None:
+                self._estimated_percent = float(inverter_battery_percent)
+            self._last_ts = ts_utc
+            return self._estimated_percent
+
+        # Validate required settings before calculating.
+        if (
+            battery_count <= 0
+            or capacity_per_battery_kwh <= 0
+            or not (0 < usable_capacity_percent <= 100)
+        ):
+            self._last_ts = ts_utc
+            return self._estimated_percent
+
+        # Both power readings must be present for a meaningful calculation.
+        if load_watts is None or input_watts is None:
+            self._last_ts = ts_utc
+            return self._estimated_percent
+
+        # Total and usable capacity in kWh.
+        total_capacity_kwh = battery_count * capacity_per_battery_kwh
+        usable_capacity_kwh = total_capacity_kwh * (usable_capacity_percent / 100.0)
+        if usable_capacity_kwh <= 0:
+            self._last_ts = ts_utc
+            return self._estimated_percent
+
+        # Net watts: positive when draining battery, negative when charging.
+        net_watts = load_watts - input_watts
+
+        # Elapsed time in hours since the last reading.
+        elapsed_seconds = (ts_utc - self._last_ts).total_seconds()
+        elapsed_hours = elapsed_seconds / 3600.0
+
+        # Net energy transferred during this interval (kWh).
+        net_kwh = net_watts * elapsed_hours / 1000.0
+
+        # Adjust the running estimate and clamp to the valid [0, 100] range.
+        self._estimated_percent -= (net_kwh / usable_capacity_kwh) * 100.0
+        self._estimated_percent = max(0.0, min(100.0, self._estimated_percent))
+        self._last_ts = ts_utc
+        return self._estimated_percent
+
+    def reset(self) -> None:
+        """Clear the current estimate and timestamp, forcing re-initialisation."""
+        self._estimated_percent = None
+        self._last_ts = None
 
 
 class Database:
@@ -404,6 +532,26 @@ class AlertManager:
                     sample,
                 )
 
+        # Alert when the estimated battery percentage falls below the configured threshold.
+        estimated_pct = sample.get("estimated_battery_percent")
+        if (
+            self.settings.battery_estimate_enabled
+            and self.settings.low_estimated_battery_percent is not None
+            and estimated_pct is not None
+            and estimated_pct <= self.settings.low_estimated_battery_percent
+        ):
+            self._emit(
+                ts_utc,
+                "warning",
+                "low_estimated_battery",
+                "Estimated battery is low",
+                (
+                    f"Estimated battery capacity is at {estimated_pct:.1f}% "
+                    f"(threshold {self.settings.low_estimated_battery_percent}%)."
+                ),
+                sample,
+            )
+
     def notify_error(self, ts_utc: datetime, error_message: str) -> None:
         self._emit(
             ts_utc,
@@ -555,6 +703,7 @@ class PowerMonitorState:
         self._load_persisted_alert_settings()
         self.client = InverterClient(settings)
         self.alert_manager = AlertManager(settings, database)
+        self.soc_estimator = BatterySOCEstimator()
         self.lock = threading.Lock()
         self.latest: dict[str, Any] | None = None
         self.last_error: str | None = None
@@ -578,11 +727,34 @@ class PowerMonitorState:
             try:
                 sample = self.client.poll()
                 self.database.insert_sample(timestamp, sample)
-                self.alert_manager.evaluate_sample(timestamp, sample)
-                self.alert_manager.evaluate_forecast_advisory(timestamp, sample)
+
+                # Compute estimated battery percentage (not persisted to DB).
+                estimated_pct: float | None = None
+                if self.settings.battery_estimate_enabled:
+                    estimated_pct = self.soc_estimator.update(
+                        timestamp,
+                        sample.get("battery_capacity_percent"),
+                        sample.get("output_active_power_w"),
+                        sample.get("pv_input_power_w"),
+                        self.settings.battery_count,
+                        self.settings.capacity_per_battery_kwh,
+                        self.settings.usable_capacity_percent,
+                    )
+
+                # Build an enriched sample that includes the estimated SOC so
+                # that alerts and the live payload see a consistent value.
+                enriched_sample = {
+                    **sample,
+                    "estimated_battery_percent": (
+                        round(estimated_pct, 1) if estimated_pct is not None else None
+                    ),
+                }
+
+                self.alert_manager.evaluate_sample(timestamp, enriched_sample)
+                self.alert_manager.evaluate_forecast_advisory(timestamp, enriched_sample)
                 self.database.prune()
                 with self.lock:
-                    self.latest = {"ts_utc": isoformat(timestamp), **sample}
+                    self.latest = {"ts_utc": isoformat(timestamp), **enriched_sample}
                     self.last_success_at = isoformat(timestamp)
                     self.last_error = None
             except Exception as exc:
@@ -602,6 +774,11 @@ class PowerMonitorState:
         forecast_cloud_threshold_percent = self.database.fetch_config("forecast_cloud_threshold_percent")
         forecast_evening_advisory_hour = self.database.fetch_config("forecast_evening_advisory_hour")
         forecast_reserve_battery_percent = self.database.fetch_config("forecast_reserve_battery_percent")
+        battery_count = self.database.fetch_config("battery_count")
+        capacity_per_battery_kwh = self.database.fetch_config("capacity_per_battery_kwh")
+        usable_capacity_percent = self.database.fetch_config("usable_capacity_percent")
+        battery_estimate_enabled = self.database.fetch_config("battery_estimate_enabled")
+        low_estimated_battery_percent = self.database.fetch_config("low_estimated_battery_percent")
 
         if low_battery is not None:
             try:
@@ -650,6 +827,31 @@ class PowerMonitorState:
                 self.settings.forecast_reserve_battery_percent = int(forecast_reserve_battery_percent)
             except ValueError:
                 pass
+        if battery_count is not None:
+            try:
+                self.settings.battery_count = int(battery_count)
+            except ValueError:
+                pass
+        if capacity_per_battery_kwh is not None:
+            try:
+                self.settings.capacity_per_battery_kwh = float(capacity_per_battery_kwh)
+            except ValueError:
+                pass
+        if usable_capacity_percent is not None:
+            try:
+                self.settings.usable_capacity_percent = int(usable_capacity_percent)
+            except ValueError:
+                pass
+        if battery_estimate_enabled is not None:
+            self.settings.battery_estimate_enabled = battery_estimate_enabled == "1"
+        if low_estimated_battery_percent is not None:
+            if low_estimated_battery_percent == "":
+                self.settings.low_estimated_battery_percent = None
+            else:
+                try:
+                    self.settings.low_estimated_battery_percent = int(low_estimated_battery_percent)
+                except ValueError:
+                    pass
 
     def get_live_payload(self) -> dict[str, Any]:
         with self.lock:
@@ -680,6 +882,11 @@ class PowerMonitorState:
                 "forecast_cloud_threshold_percent": self.settings.forecast_cloud_threshold_percent,
                 "forecast_evening_advisory_hour": self.settings.forecast_evening_advisory_hour,
                 "forecast_reserve_battery_percent": self.settings.forecast_reserve_battery_percent,
+                "battery_count": self.settings.battery_count,
+                "capacity_per_battery_kwh": self.settings.capacity_per_battery_kwh,
+                "usable_capacity_percent": self.settings.usable_capacity_percent,
+                "battery_estimate_enabled": self.settings.battery_estimate_enabled,
+                "low_estimated_battery_percent": self.settings.low_estimated_battery_percent,
             },
         }
 
@@ -762,6 +969,44 @@ class PowerMonitorState:
                     raise ValueError("forecast_reserve_battery_percent must be between 1 and 100")
                 self.settings.forecast_reserve_battery_percent = value
                 self.database.upsert_config("forecast_reserve_battery_percent", str(value))
+
+            if "battery_count" in updates:
+                value = int(updates["battery_count"])
+                if value < 0:
+                    raise ValueError("battery_count must be 0 or greater")
+                self.settings.battery_count = value
+                self.database.upsert_config("battery_count", str(value))
+
+            if "capacity_per_battery_kwh" in updates:
+                value = float(updates["capacity_per_battery_kwh"])
+                if value < 0:
+                    raise ValueError("capacity_per_battery_kwh must be 0 or greater")
+                self.settings.capacity_per_battery_kwh = value
+                self.database.upsert_config("capacity_per_battery_kwh", str(value))
+
+            if "usable_capacity_percent" in updates:
+                value = int(updates["usable_capacity_percent"])
+                if not 1 <= value <= 100:
+                    raise ValueError("usable_capacity_percent must be between 1 and 100")
+                self.settings.usable_capacity_percent = value
+                self.database.upsert_config("usable_capacity_percent", str(value))
+
+            if "battery_estimate_enabled" in updates:
+                enabled = bool(updates["battery_estimate_enabled"])
+                self.settings.battery_estimate_enabled = enabled
+                self.database.upsert_config("battery_estimate_enabled", "1" if enabled else "0")
+
+            if "low_estimated_battery_percent" in updates:
+                raw = updates["low_estimated_battery_percent"]
+                if raw in ("", None):
+                    self.settings.low_estimated_battery_percent = None
+                    self.database.upsert_config("low_estimated_battery_percent", "")
+                else:
+                    value = int(raw)
+                    if not 1 <= value <= 99:
+                        raise ValueError("low_estimated_battery_percent must be between 1 and 99")
+                    self.settings.low_estimated_battery_percent = value
+                    self.database.upsert_config("low_estimated_battery_percent", str(value))
 
         return self.get_alerts_payload()["settings"]
 
