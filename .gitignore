@@ -1,7 +1,5 @@
 .venv/
-data/
+data/*.sqlite3
 __pycache__/
 *.pyc
 .DS_Store
-data/power_monitor.sqlite3
-data/test*.sqlite3
