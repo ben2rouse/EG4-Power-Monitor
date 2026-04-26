@@ -729,7 +729,7 @@ function bindControls() {
         capacity_per_battery_kwh: Number(settingCapacityPerBatteryKwh.value),
         usable_capacity_percent: Number(settingUsableCapacityPercent.value),
         battery_estimate_enabled: settingBatteryEstimateEnabled.checked,
-        low_estimated_battery_percent: settingLowEstimatedBatteryPercent.value.trim() || null,
+        low_estimated_battery_percent: settingLowEstimatedBatteryPercent.value.trim() ? Number(settingLowEstimatedBatteryPercent.value) : null,
       });
       await refreshAlerts();
       alertSettingsStatus.textContent = "Saved. New alert rules are active now.";

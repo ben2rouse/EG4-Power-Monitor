@@ -303,7 +303,7 @@ class BatterySOCEstimator:
         return self._estimated_percent
 
     def reset(self) -> None:
-        """Clear the current estimate and timestamp, forcing re-initialisation."""
+        """Clear the current estimate and timestamp, forcing re-initialization."""
         self._estimated_percent = None
         self._last_ts = None
 
