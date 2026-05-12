@@ -903,7 +903,7 @@ class PowerMonitorState:
             if self.settings.battery_estimate_enabled:
                 try:
                     estimated_percent = estimator.update(
-                        parse_utc(str(point["ts_utc"])),
+                        parse_utc(point["ts_utc"]),
                         point.get("battery_capacity_percent"),
                         point.get("output_active_power_w"),
                         point.get("pv_input_power_w"),
