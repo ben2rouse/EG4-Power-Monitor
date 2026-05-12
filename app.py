@@ -79,6 +79,10 @@ def isoformat(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def parse_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
 class InverterProtocolError(RuntimeError):
     pass
 
@@ -890,6 +894,35 @@ class PowerMonitorState:
             },
         }
 
+    def get_history_points(self, hours: int) -> list[dict[str, Any]]:
+        points = self.database.fetch_history(hours)
+        estimator = BatterySOCEstimator()
+        enriched_points: list[dict[str, Any]] = []
+        for point in points:
+            estimated_percent: float | None = None
+            if self.settings.battery_estimate_enabled:
+                try:
+                    estimated_percent = estimator.update(
+                        parse_utc(point["ts_utc"]),
+                        point.get("battery_capacity_percent"),
+                        point.get("output_active_power_w"),
+                        point.get("pv_input_power_w"),
+                        self.settings.battery_count,
+                        self.settings.capacity_per_battery_kwh,
+                        self.settings.usable_capacity_percent,
+                    )
+                except ValueError:
+                    estimator.reset()
+            enriched_points.append(
+                {
+                    **point,
+                    "estimated_battery_percent": (
+                        round(estimated_percent, 1) if estimated_percent is not None else None
+                    ),
+                }
+            )
+        return enriched_points
+
     def update_alert_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             if "low_battery_percent" in updates:
@@ -1030,7 +1063,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/history":
             query = parse_qs(parsed.query)
             hours = max(1, min(168, int(query.get("hours", ["24"])[0])))
-            self._send_json({"points": self.app_state.database.fetch_history(hours)})
+            self._send_json({"points": self.app_state.get_history_points(hours)})
             return
         if parsed.path == "/api/status":
             self._send_json(
