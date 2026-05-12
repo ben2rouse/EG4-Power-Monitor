@@ -9,6 +9,7 @@
   --load: #d8602b;
   --solar: #e0a62f;
   --battery: #2c8a73;
+  --estimated: #4b8fda;
   --voltage: #157a6e;
   --level: #3c5ccf;
   --ok: #266c4f;
@@ -310,6 +311,7 @@ h2 {
 .swatch-load { background: var(--load); }
 .swatch-solar { background: var(--solar); }
 .swatch-battery { background: var(--battery); }
+.swatch-estimated { background: var(--estimated); }
 .swatch-voltage { background: var(--voltage); }
 .swatch-level { background: var(--level); }
 

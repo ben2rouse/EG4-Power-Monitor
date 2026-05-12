@@ -56,6 +56,7 @@ const chartSeries = [
   { key: "pv_input_power_w", label: "Solar watts", unit: "W", colorVar: "var(--solar)", swatch: "swatch-solar", axis: "power", checked: true },
   { key: "battery_voltage_v", label: "Battery voltage", unit: "V", colorVar: "var(--voltage)", swatch: "swatch-voltage", axis: "voltage", checked: false },
   { key: "battery_capacity_percent", label: "Battery capacity", unit: "%", colorVar: "var(--battery)", swatch: "swatch-battery", axis: "percent", checked: true },
+  { key: "estimated_battery_percent", label: "Est. capacity", unit: "%", colorVar: "var(--estimated)", swatch: "swatch-estimated", axis: "percent", checked: true },
   { key: "load_percent", label: "Load level", unit: "%", colorVar: "var(--level)", swatch: "swatch-level", axis: "percent", checked: true },
 ];
 
